@@ -5,8 +5,9 @@
  * `blade-components.webgl` configuration (embedded on window.DDFSN.webgl
  * by the @ddfsnAppearance script) is enabled and the component key is not
  * switched off, a small canvas is mounted inside the element and renders
- * the surface tint as a live glow — three soft blobs of the tint colour
- * drifting behind the content. The canvas sits behind everything (the
+ * the surface tint as a live glow — slowly flowing "living silk" of the
+ * tint colour behind the content, with a specular spotlight that follows
+ * the pointer. The canvas sits behind everything (the
  * element gets `.bc-webgl-active`, whose CSS places the canvas at
  * z-index:-1 inside an isolated stacking context), and the static CSS
  * tint gradient steps aside while it runs.
@@ -29,24 +30,76 @@ void main () {
 }
 `
 
-// Three drifting radial blobs over the element's box (v_uv.y runs 0 at the
-// top, matching the CSS gradient direction). Premultiplied output against
-// ONE / ONE_MINUS_SRC_ALPHA.
+// Domain-warped fractal noise ("living silk") in the tint colour: the
+// field is fed through itself (fbm of fbm of fbm) so it flows like slow
+// smoke instead of reading as discrete blobs, faded toward the bottom to
+// echo the heading band. A pointer spotlight adds a specular highlight
+// that follows the cursor, with a rim sheen where the light is close to
+// an edge; a 1/255 dither breaks up gradient banding on flat surfaces.
+// Premultiplied output against ONE / ONE_MINUS_SRC_ALPHA.
 const FRAGMENT_SOURCE = `
-precision mediump float;
+precision highp float;
 varying vec2 v_uv;
 uniform float u_time;
 uniform vec3 u_color;
 uniform float u_strength;
-uniform vec2 u_aspect;
-void main () {
+uniform vec2 u_size;
+uniform vec4 u_pointer;
+
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; i++) {
+        v += a * vnoise(p);
+        p = p * 2.03 + vec2(11.7, 3.9);
+        a *= 0.5;
+    }
+    return v;
+}
+
+void main() {
     float t = u_time;
-    vec2 d1 = (v_uv - vec2(0.25 + 0.10 * sin(t * 0.21), 0.18 + 0.08 * cos(t * 0.17))) * u_aspect;
-    vec2 d2 = (v_uv - vec2(0.78 + 0.12 * cos(t * 0.13), 0.35 + 0.14 * sin(t * 0.19))) * u_aspect;
-    vec2 d3 = (v_uv - vec2(0.50 + 0.16 * sin(t * 0.11 + 2.0), 0.95 + 0.10 * sin(t * 0.15 + 1.0))) * u_aspect;
-    float a = exp(-dot(d1, d1) * 3.2) + exp(-dot(d2, d2) * 4.5) * 0.8 + exp(-dot(d3, d3) * 2.2) * 0.7;
-    float alpha = clamp(u_strength * a * 0.55, 0.0, 0.85);
-    gl_FragColor = vec4(u_color * alpha, alpha);
+    vec2 e = max(u_size, vec2(0.001));
+    vec2 p = (v_uv - 0.5) * e * 3.0;
+
+    vec2 q = vec2(fbm(p + vec2(0.0, t * 0.05)), fbm(p + vec2(5.2, 1.3) - t * 0.04));
+    vec2 r = vec2(fbm(p + 3.0 * q + vec2(1.7, 9.2) + t * 0.035),
+                  fbm(p + 3.0 * q + vec2(8.3, 2.8) - t * 0.045));
+    float f = fbm(p + 3.2 * r);
+
+    float topFade = mix(1.0, 0.55, v_uv.y);
+    float body = smoothstep(0.26, 0.92, f) * topFade;
+
+    vec2 puv = (u_pointer.xy - 0.5) * e * 3.0;
+    vec2 pp = p - puv;
+    float glow = exp(-dot(pp, pp) * 1.5) * u_pointer.w;
+    vec2 edge = e * (0.5 - abs(v_uv - 0.5)) * 3.0;
+    float rim = smoothstep(0.16, 0.0, min(edge.x, edge.y)) * glow;
+
+    float alpha = clamp(u_strength * (0.10 + body * 0.62) + glow * (0.16 + u_strength * 0.22) + rim * 0.5, 0.0, 0.85);
+    vec3 col = u_color + vec3(0.14) * glow + u_color * rim * 0.8;
+
+    alpha += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
+    alpha = clamp(alpha, 0.0, 0.85);
+
+    gl_FragColor = vec4(col * alpha, alpha);
 }
 `
 
@@ -128,6 +181,12 @@ const draw = (entry, seconds) => {
     const cfg = config() || {}
     const intensity = cfg.intensity === undefined ? 1 : cfg.intensity
 
+    const pointer = entry.pointer
+
+    pointer.w = reducedMotion()
+        ? pointer.target
+        : pointer.w + (pointer.target - pointer.w) * 0.09
+
     gl.viewport(0, 0, width, height)
     gl.clearColor(0, 0, 0, 0)
     gl.clear(gl.COLOR_BUFFER_BIT)
@@ -135,7 +194,8 @@ const draw = (entry, seconds) => {
     gl.uniform1f(uniforms.time, seconds)
     gl.uniform3fv(uniforms.color, tint.color)
     gl.uniform1f(uniforms.strength, Math.min(1, (0.35 + tint.strength * 0.65) * intensity))
-    gl.uniform2f(uniforms.aspect, Math.max(1, width / Math.max(height, 1)), 1)
+    gl.uniform2f(uniforms.size, width / Math.max(width, height), height / Math.max(width, height))
+    gl.uniform4f(uniforms.pointer, pointer.x, pointer.y, 0, pointer.w)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 }
 
@@ -248,8 +308,10 @@ const register = (el) => {
             time: gl.getUniformLocation(program, 'u_time'),
             color: gl.getUniformLocation(program, 'u_color'),
             strength: gl.getUniformLocation(program, 'u_strength'),
-            aspect: gl.getUniformLocation(program, 'u_aspect'),
+            size: gl.getUniformLocation(program, 'u_size'),
+            pointer: gl.getUniformLocation(program, 'u_pointer'),
         },
+        pointer: { x: 0.5, y: 0.5, w: 0, target: 0 },
         visible: true,
         width: 0,
         height: 0,
@@ -287,6 +349,26 @@ const register = (el) => {
         }
 
         if (resumed) {
+            schedule()
+        }
+    })
+
+    el.addEventListener('pointermove', (ev) => {
+        const rect = el.getBoundingClientRect()
+
+        entry.pointer.x = (ev.clientX - rect.left) / Math.max(rect.width, 1)
+        entry.pointer.y = (ev.clientY - rect.top) / Math.max(rect.height, 1)
+        entry.pointer.target = 1
+
+        if (reducedMotion()) {
+            schedule()
+        }
+    })
+
+    el.addEventListener('pointerleave', () => {
+        entry.pointer.target = 0
+
+        if (reducedMotion()) {
             schedule()
         }
     })

@@ -227,7 +227,7 @@ The override is persisted in localStorage (`ddfsn.tint`) and restored before fir
 
 ## WebGL surface effects
 
-The tint can also be rendered as a live WebGL glow: instead of the static gradient, tagged elements get a canvas behind their content painting three soft blobs of the tint colour drifting slowly across the surface. Enable it in `config/blade-components.php`:
+The tint can also be rendered as a live WebGL glow: instead of the static gradient, tagged elements get a canvas behind their content painting slowly flowing "living silk" — the tint colour moved through domain-warped fractal noise — with a specular spotlight that follows the pointer and a rim sheen where the light nears an edge. Enable it in `config/blade-components.php`:
 
 ```php
 'webgl' => [
