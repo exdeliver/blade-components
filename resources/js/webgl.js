@@ -89,33 +89,35 @@ float lightShadow(vec2 p, vec2 l, vec4 occ, float soft) {
     return smoothstep(0.0, soft, band);
 }
 
-// Sharp cast shadow of an interactable control over the surface,
-// projected directly away from a blob (the caster blocks that light),
-// long and dark while the blob glows on it, fading as the light drifts
-// off. Almost no penumbra — the silhouette cuts the lit region.
-float castShadow(vec2 p, vec4 c, vec2 blob, vec2 e, float l) {
-    if (l < 0.04) {
+// One single hard shadow, one caster. It grows straight out of the
+// control's left edge: the near end matches the control, the far end
+// runs left while flaring open toward the bottom — a key light at the
+// upper right throwing the control off the plane. Sharp edges, fade
+// at the tip, scaled by how strongly the light is on the control.
+float castFan(vec2 p, vec4 c, vec2 e) {
+    vec2 bl = (c.xy - 0.5) * e;
+    vec2 tr = bl + c.zw * e;
+
+    float len = min((tr.x - bl.x) * 1.3 + (tr.y - bl.y) * 2.0, 0.38);
+    float dx = bl.x - p.x;
+
+    if (dx < 0.0 || dx > len) {
         return 0.0;
     }
 
-    vec2 center = (c.xy + c.zw * 0.5 - 0.5) * e;
+    float t = dx / len;
+    float topY = tr.y + 0.004;
+    float botY = bl.y - t * len * 0.55 - (tr.y - bl.y) * 0.15;
 
-    // Radial away from the light; when the light sits right on the
-    // caster (pointer hovering it), fall back to the key direction —
-    // upper-right light, cut toward the lower left.
-    vec2 dir = normalize(center - blob + vec2(-0.06, -0.022));
-    vec2 sz = c.zw * e;
-    float len = (sz.x + sz.y) * 0.28 * (0.55 + 1.3 * l);
-    vec2 lo = (c.xy - 0.5) * e + dir * len;
-    vec2 hi = lo + sz;
-
-    if (p.x < lo.x || p.x > hi.x || p.y < lo.y || p.y > hi.y) {
+    if (p.y > topY || p.y < botY) {
         return 0.0;
     }
 
-    float band = min(min(p.x - lo.x, hi.x - p.x), min(p.y - lo.y, hi.y - p.y));
+    float edgeTop = smoothstep(0.0, 0.008, topY - p.y);
+    float edgeBot = smoothstep(0.0, 0.008, p.y - botY);
+    float tip = 1.0 - smoothstep(len * 0.62, len, dx);
 
-    return l * smoothstep(0.0, 0.004, band);
+    return edgeTop * edgeBot * tip;
 }
 
 void main() {
@@ -128,7 +130,6 @@ void main() {
     // --- drifting blobs, each casting the neighbour shadows -------
     float blobs = 0.0;
     float occl = 1.0;
-    float castCut = 0.0;
 
     for (int i = 0; i < 3; i++) {
         float o = float(i) * 2.4;
@@ -149,14 +150,6 @@ void main() {
 
         blobs += l * (0.08 + 0.92 * sh);
         occl = min(occl, sh);
-
-        for (int k = 0; k < 3; k++) {
-            if (float(k) >= u_castCount) {
-                break;
-            }
-
-            castCut = max(castCut, castShadow(p, u_cast[k], c, e, l));
-        }
     }
 
     blobs /= 2.4;
@@ -182,14 +175,12 @@ void main() {
 
     glow *= 0.08 + 0.92 * psh;
 
-    for (int k = 0; k < 3; k++) {
-        if (float(k) >= u_castCount) {
-            break;
-        }
 
-        vec2 cc = (u_cast[k].xy + u_cast[k].zw * 0.5 - 0.5) * e;
-        vec2 pc = cc - pl;
-        castCut = max(castCut, castShadow(p, u_cast[k], pl, e, falloff(dot(pc, pc), 0.10) * u_pointer.w));
+    // The single cast fan, scaled by how strongly its owner is lit.
+    float castCut = 0.0;
+
+    if (u_castCount > 0.0) {
+        castCut = clamp(castFan(p, u_cast[0], e) * u_castCount * 1.25, 0.0, 1.0);
     }
 
     // Coherent shading: light is stronger near the top (ambient from
@@ -197,13 +188,13 @@ void main() {
     float light = blobs * 0.38 + edgeLight * 0.16 + glow * 0.75;
     light *= mix(0.85, 1.0, v_uv.y);
     light += edgeLight * glow * 0.45;
-    light *= 1.0 - 0.85 * castCut;
+    light *= 1.0 - 0.92 * castCut;
 
     float shadow = clamp(1.0 - min(occl, 1.0 - castCut), 0.0, 1.0);
 
-    float alpha = clamp(u_strength * 0.02 + light * u_strength * 0.40 + shadow * 0.075, 0.0, 0.35);
+    float alpha = clamp(u_strength * 0.02 + light * u_strength * 0.40 + shadow * 0.14, 0.0, 0.42);
     vec3 col = min(u_color * (1.0 + light * 0.45 + glow * 0.25), vec3(1.0));
-    col *= 1.0 - shadow * 0.6;
+    col *= 1.0 - shadow * 0.78;
 
     alpha += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
     alpha = clamp(alpha, 0.0, 0.35);
@@ -607,7 +598,7 @@ const collectCasters = (entry, seconds) => {
     const candidates = []
     const seen = new Set()
 
-    const push = (o) => {
+    const push = (o, el) => {
         if (! o || o.width < 4 || o.height < 4 || seen.has(o)) {
             return
         }
@@ -635,7 +626,7 @@ const collectCasters = (entry, seconds) => {
 
         if (pointer.w > 0.05) {
             const dx = (cx - pointer.x) * ex
-            const dy = (cy - pointer.y) * ey
+            const dy = (cy - (1 - pointer.y)) * ey
             const l = Math.exp(-(dx * dx + dy * dy) / 0.10) * pointer.w * 1.6
 
             u.score = Math.max(u.score, l)
@@ -645,29 +636,31 @@ const collectCasters = (entry, seconds) => {
     }
 
     for (const el of entry.castEls) {
-        push(el.__bcCastRect)
+        push(el.__bcCastRect, el)
     }
 
     for (const caster of casters) {
         if (! entry.el.contains(caster.el)) {
-            push(caster.rect)
+            push(caster.rect, caster.el)
         }
     }
 
     candidates.sort((a, b) => b.score - a.score)
 
-    const count = Math.min(candidates.length, 3)
+    const best = candidates[0]
 
-    for (let i = 0; i < count; i++) {
-        const u = candidates[i]
-
-        castBuf[i * 4] = u.x
-        castBuf[i * 4 + 1] = u.y
-        castBuf[i * 4 + 2] = u.w
-        castBuf[i * 4 + 3] = u.h
+    // One shadow, one owner: the single best-lit control casts, and
+    // the fan's darkness scales with how strongly the light is on it.
+    if (! best || best.score < 0.06) {
+        return 0
     }
 
-    return count
+    castBuf[0] = best.x
+    castBuf[1] = best.y
+    castBuf[2] = best.w
+    castBuf[3] = best.h
+
+    return Math.min(best.score, 1.0)
 }
 
 const renderSurface = (m, entry, seconds) => {
@@ -935,6 +928,7 @@ export function bootWebgl () {
         entries: entries.map((e) => ({
             w: e.width, h: e.height, visible: e.visible,
             key: e.el.getAttribute('data-bc-webgl'),
+
         })),
     })
 
