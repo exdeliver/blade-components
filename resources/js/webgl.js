@@ -89,35 +89,45 @@ float lightShadow(vec2 p, vec2 l, vec4 occ, float soft) {
     return smoothstep(0.0, soft, band);
 }
 
-// One single hard shadow, one caster. It grows straight out of the
-// control's left edge: the near end matches the control, the far end
-// runs left while flaring open toward the bottom — a key light at the
-// upper right throwing the control off the plane. Sharp edges, fade
-// at the tip, scaled by how strongly the light is on the control.
-float castFan(vec2 p, vec4 c, vec2 e) {
+// One single hard shadow, one caster. The pointer IS the light: rays
+// grazing the control's far corners bound a wedge that starts at the
+// control and runs a long way across the surface, flaring open with
+// distance — hovering the control throws a big sharp shadow away from
+// the mouse; with the mouse away, the same wedge rests on the key
+// light at the right edge.
+float cross2(vec2 a, vec2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+float castFan(vec2 p, vec4 c, vec2 e, vec2 L) {
     vec2 bl = (c.xy - 0.5) * e;
     vec2 tr = bl + c.zw * e;
+    float farX = L.x > (bl.x + tr.x) * 0.5 ? bl.x : tr.x;
 
-    float len = min((tr.x - bl.x) * 1.3 + (tr.y - bl.y) * 2.0, 0.38);
-    float dx = bl.x - p.x;
+    vec2 rT = vec2(farX, tr.y) - L;
+    vec2 rB = vec2(farX, bl.y) - L;
+    vec2 v = p - L;
 
-    if (dx < 0.0 || dx > len) {
+    float sT = cross2(rT, v);
+    float sB = cross2(rB, v);
+
+    if (sT * sB >= 0.0) {
         return 0.0;
     }
 
-    float t = dx / len;
-    float topY = tr.y + 0.004;
-    float botY = bl.y - t * len * 0.55 - (tr.y - bl.y) * 0.15;
+    vec2 mid = normalize(normalize(rT) + normalize(rB));
+    float back = max(dot(rT, mid), dot(rB, mid));
+    float dist = dot(v, mid) - back;
 
-    if (p.y > topY || p.y < botY) {
+    if (dist < 0.0) {
         return 0.0;
     }
 
-    float edgeTop = smoothstep(0.0, 0.008, topY - p.y);
-    float edgeBot = smoothstep(0.0, 0.008, p.y - botY);
-    float tip = 1.0 - smoothstep(len * 0.62, len, dx);
+    float feather = smoothstep(0.0, 0.006 * length(rT), abs(sT))
+        * smoothstep(0.0, 0.006 * length(rB), abs(sB));
+    float tip = 1.0 - smoothstep(0.9, 1.7, dist);
 
-    return edgeTop * edgeBot * tip;
+    return feather * tip;
 }
 
 void main() {
@@ -180,7 +190,9 @@ void main() {
     float castCut = 0.0;
 
     if (u_castCount > 0.0) {
-        castCut = clamp(castFan(p, u_cast[0], e) * u_castCount * 1.25, 0.0, 1.0);
+        vec2 keyL = vec2(e.x * 0.95, e.y * 0.30);
+        vec2 castL = mix(keyL, pl, clamp(u_pointer.w, 0.0, 1.0));
+        castCut = clamp(castFan(p, u_cast[0], e, castL) * u_castCount * 1.25, 0.0, 1.0);
     }
 
     // Coherent shading: light is stronger near the top (ambient from
