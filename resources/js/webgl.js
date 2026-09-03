@@ -49,6 +49,9 @@ uniform vec3 u_color;
 uniform float u_strength;
 uniform vec2 u_size;
 uniform vec4 u_pointer;
+uniform vec4 u_occ[3];
+uniform float u_occSoft[3];
+uniform float u_occCount;
 
 // One coherent light rig for the whole surface: three slow drifting
 // light blobs, a soft area light bleeding in from the edges, the
@@ -66,6 +69,24 @@ float falloff(float d2, float r2) {
     return exp(-d2 / r2);
 }
 
+// Occluded light: the neighbour rectangle, scaled away from the light
+// (as a shape hovering between light and plane would project), is the
+// light's shadow. Inside is fully occluded, the band of width soft
+// around the projected silhouette is the penumbra — thin for occluders
+// close to the light (sharp edge), wide for distant ones.
+float lightShadow(vec2 p, vec2 l, vec4 occ, float soft) {
+    vec2 lo = l + (occ.xy - l) * (1.0 + soft * 3.0);
+    vec2 hi = l + (occ.xy + occ.zw - l) * (1.0 + soft * 3.0);
+
+    if (p.x < lo.x || p.x > hi.x || p.y < lo.y || p.y > hi.y) {
+        return 1.0;
+    }
+
+    float band = min(min(p.x - lo.x, hi.x - p.x), min(p.y - lo.y, hi.y - p.y));
+
+    return smoothstep(0.0, soft, band);
+}
+
 void main() {
     float t = u_time;
     vec2 e = max(u_size, vec2(0.001));
@@ -73,8 +94,9 @@ void main() {
     // Aspect-corrected, element-centred space (y-up, GL orientation).
     vec2 p = (v_uv - 0.5) * e;
 
-    // --- drifting blobs -------------------------------------------
+    // --- drifting blobs, each casting the neighbour shadows -------
     float blobs = 0.0;
+    float occl = 1.0;
 
     for (int i = 0; i < 3; i++) {
         float o = float(i) * 2.4;
@@ -82,7 +104,19 @@ void main() {
         c *= e;
         float r2 = 0.16 + 0.05 * sin(t * 0.11 + o * 3.1);
         vec2 d = p - c;
-        blobs += falloff(dot(d, d), r2);
+        float l = falloff(dot(d, d), r2);
+        float sh = 1.0;
+
+        for (int j = 0; j < 3; j++) {
+            if (float(j) >= u_occCount) {
+                break;
+            }
+
+            sh *= lightShadow(p, c, vec4((u_occ[j].xy - 0.5) * e, u_occ[j].zw * e), u_occSoft[j]);
+        }
+
+        blobs += l * (0.08 + 0.92 * sh);
+        occl = min(occl, sh);
     }
 
     blobs /= 2.4;
@@ -92,8 +126,21 @@ void main() {
     float edgeLight = falloff(min(edge.x, edge.y) * min(edge.x, edge.y), 0.012);
 
     // --- pointer light ----------------------------------------------
-    vec2 pd = p - (vec2(u_pointer.x, 1.0 - u_pointer.y) - 0.5) * e;
+    vec2 pl = (vec2(u_pointer.x, 1.0 - u_pointer.y) - 0.5) * e;
+    vec2 pd = p - pl;
     float glow = falloff(dot(pd, pd), 0.10) * u_pointer.w;
+
+    float psh = 1.0;
+
+    for (int j = 0; j < 3; j++) {
+        if (float(j) >= u_occCount) {
+            break;
+        }
+
+        psh *= lightShadow(p, pl, vec4((u_occ[j].xy - 0.5) * e, u_occ[j].zw * e), u_occSoft[j]);
+    }
+
+    glow *= 0.08 + 0.92 * psh;
 
     // Coherent shading: light is stronger near the top (ambient from
     // above) and gathers where a source already lights the edge.
@@ -101,8 +148,11 @@ void main() {
     light *= mix(0.85, 1.0, v_uv.y);
     light += edgeLight * glow * 0.45;
 
-    float alpha = clamp(u_strength * 0.02 + light * u_strength * 0.40, 0.0, 0.35);
+    float shadow = clamp(1.0 - occl, 0.0, 1.0);
+
+    float alpha = clamp(u_strength * 0.02 + light * u_strength * 0.40 + shadow * 0.075, 0.0, 0.35);
     vec3 col = min(u_color * (1.0 + light * 0.45 + glow * 0.25), vec3(1.0));
+    col *= 1.0 - shadow * 0.6;
 
     alpha += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
     alpha = clamp(alpha, 0.0, 0.35);
@@ -252,8 +302,11 @@ const ensureMaster = () => {
     let gl = null
 
     try {
-        gl = canvas.getContext('webgl2', { alpha: true, antialias: false, preserveDrawingBuffer: true })
-            || canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: true })
+        // preserveDrawingBuffer is NOT needed: blits read the buffer in
+        // the same task that drew it, and preserved buffers significantly
+        // raise GPU memory and compositor pressure per reallocation.
+        gl = canvas.getContext('webgl2', { alpha: true, antialias: false })
+            || canvas.getContext('webgl', { alpha: true, antialias: false })
     } catch (e) {
         gl = null
     }
@@ -311,6 +364,9 @@ const ensureMaster = () => {
             strength: gl.getUniformLocation(program, 'u_strength'),
             size: gl.getUniformLocation(program, 'u_size'),
             pointer: gl.getUniformLocation(program, 'u_pointer'),
+            occ: gl.getUniformLocation(program, 'u_occ[0]'),
+            occSoft: gl.getUniformLocation(program, 'u_occSoft[0]'),
+            occCount: gl.getUniformLocation(program, 'u_occCount'),
         },
     }
 
@@ -338,6 +394,85 @@ const ensureSize = (m, w, h) => {
     return true
 }
 
+const occBuf = new Float32Array(12)
+const occSoftBuf = new Float32Array(3)
+
+// Rectangles are measured on events (resize, scroll, pointer, theme,
+// route swaps) — NEVER inside the frame loop: a getBoundingClientRect
+// there forces layout 60 times a second and churns canvas backing
+// stores on compositor layers (visible as flickering white patches).
+let measurePending = false
+
+const measureAll = () => {
+    measurePending = false
+
+    for (const entry of entries) {
+        if (entry.el.isConnected) {
+            entry.rect = entry.el.getBoundingClientRect()
+        }
+    }
+}
+
+const scheduleMeasure = () => {
+    measurePending ||= false
+
+    if (! measurePending) {
+        measurePending = true
+        requestAnimationFrame(measureAll)
+    }
+}
+
+// The nearest other surfaces, as rectangles in this surface's uv space
+// (y up), plus a penumbra width that grows the farther an occluder sits
+// from the surface — close neighbours cast sharp-edged shadows, distant
+// ones blur out.
+const collectOccluders = (entry) => {
+    const rect = entry.rect
+
+    if (! rect || rect.width < 1) {
+        return 0
+    }
+
+    const reach = Math.max(rect.width, rect.height) * 1.4
+    const candidates = []
+
+    for (const other of entries) {
+        const o = other.rect
+
+        if (other === entry || ! o || o.width < 8 || o.height < 8) {
+            continue
+        }
+
+        const dx = Math.max(o.left - rect.right, rect.left - o.right, 0)
+        const dy = Math.max(o.top - rect.bottom, rect.top - o.bottom, 0)
+        const dist = Math.sqrt(dx * dx + dy * dy)
+
+        if (dist <= reach) {
+            candidates.push([dist, o])
+        }
+    }
+
+    candidates.sort((a, b) => a[0] - b[0])
+
+    let n = 0
+
+    for (const [dist, o] of candidates) {
+        if (n === 3) {
+            break
+        }
+
+        occBuf[n * 4] = (o.left - rect.left) / rect.width
+        occBuf[n * 4 + 1] = 1 - (o.bottom - rect.top) / rect.height
+        occBuf[n * 4 + 2] = o.width / rect.width
+        occBuf[n * 4 + 3] = o.height / rect.height
+        occSoftBuf[n] = Math.min(0.14, 0.010 + (dist / Math.max(rect.width, rect.height)) * 0.09)
+
+        n++
+    }
+
+    return n
+}
+
 const renderSurface = (m, entry, seconds) => {
     const { gl, uniforms } = m
     const cfg = config() || {}
@@ -353,6 +488,16 @@ const renderSurface = (m, entry, seconds) => {
     gl.uniform1f(uniforms.strength, Math.min(1, (0.35 + tint.strength * 0.65) * intensity))
     gl.uniform2f(uniforms.size, entry.width / Math.max(entry.width, entry.height), entry.height / Math.max(entry.width, entry.height))
     gl.uniform4f(uniforms.pointer, pointer.x, pointer.y, 0, pointer.w)
+
+    const occCount = collectOccluders(entry)
+
+    gl.uniform1f(uniforms.occCount, occCount)
+
+    if (occCount > 0) {
+        gl.uniform4fv(uniforms.occ, occBuf)
+        gl.uniform1fv(uniforms.occSoft, occSoftBuf)
+    }
+
     gl.viewport(0, m.canvas.height - entry.height, entry.width, entry.height)
     m.draws++
     gl.drawArrays(gl.TRIANGLES, 0, 3)
@@ -470,6 +615,7 @@ const register = (el) => {
         visible: true,
         width: 0,
         height: 0,
+        rect: null,
         rgb: null,
         pointer: { x: 0.5, y: 0.5, w: 0, target: 0 },
         ro: null,
@@ -480,6 +626,8 @@ const register = (el) => {
         const dpr = Math.min(window.devicePixelRatio || 1, maxDpr)
         const width = Math.max(1, Math.round(el.clientWidth * dpr))
         const height = Math.max(1, Math.round(el.clientHeight * dpr))
+
+        entry.rect = el.getBoundingClientRect()
 
         if (width !== entry.width || height !== entry.height) {
             entry.width = width
@@ -492,7 +640,7 @@ const register = (el) => {
     }
 
     el.addEventListener('pointermove', (ev) => {
-        const rect = el.getBoundingClientRect()
+        const rect = (entry.rect = el.getBoundingClientRect())
 
         entry.pointer.x = (ev.clientX - rect.left) / Math.max(rect.width, 1)
         entry.pointer.y = (ev.clientY - rect.top) / Math.max(rect.height, 1)
@@ -578,6 +726,7 @@ export function bootWebgl () {
     const start = () => {
         refreshTint()
         scan(document.documentElement)
+        measureAll()
         schedule()
     }
 
@@ -590,12 +739,19 @@ export function bootWebgl () {
     // Inertia re-renders swap whole trees; register late arrivals, and
     // tint changes re-resolve the shader colours live.
     new MutationObserver((records) => {
+        let added = false
+
         for (const record of records) {
             for (const node of record.addedNodes) {
                 if (node.nodeType === 1) {
                     scan(node)
+                    added = true
                 }
             }
+        }
+
+        if (added) {
+            scheduleMeasure()
         }
     }).observe(document.documentElement, { childList: true, subtree: true })
 
@@ -613,9 +769,14 @@ export function bootWebgl () {
 
     document.addEventListener('visibilitychange', () => {
         if (! document.hidden) {
+            scheduleMeasure()
             schedule()
         }
     })
+
+    // Capture catches scroll inside any container (board columns).
+    window.addEventListener('scroll', scheduleMeasure, { capture: true, passive: true })
+    window.addEventListener('resize', scheduleMeasure, { passive: true })
 
     window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => {
         schedule()
