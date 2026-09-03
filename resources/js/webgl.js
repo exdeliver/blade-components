@@ -7,15 +7,23 @@
  * switched off, a small canvas is mounted inside the element and renders
  * the surface tint as a live glow — slowly flowing "living silk" of the
  * tint colour behind the content, with a specular spotlight that follows
- * the pointer. The canvas sits behind everything (the
- * element gets `.bc-webgl-active`, whose CSS places the canvas at
- * z-index:-1 inside an isolated stacking context), and the static CSS
- * tint gradient steps aside while it runs.
+ * the pointer. The canvas sits behind everything (the element gets
+ * `.bc-webgl-active`, whose CSS places the canvas at z-index:-1 inside an
+ * isolated stacking context), and the static CSS tint gradient steps
+ * aside while it runs.
  *
- * Degradation is silent by design: no WebGL context, reduced motion
- * (static frame), hidden tab or off-screen element (paused), element
- * removed from the document (released). The element keeps its plain CSS
- * tint in every one of those cases.
+ * One WebGL context serves the whole page: every registered surface is
+ * packed into an offscreen atlas rendered by a single master context,
+ * and each element's own canvas is a plain 2D canvas blitting its slice
+ * of the atlas in the same frame. Browsers cap live WebGL contexts
+ * (roughly 8-16, evicting the oldest — which on some drivers composites
+ * as a white rectangle), so a per-element context cannot back a board of
+ * two dozen cards; 2D canvases have no such cap.
+ *
+ * Degradation is silent by design: no WebGL context, hidden tab or
+ * off-screen element (paused), element removed from the document
+ * (released), reduced motion (static frame). The element keeps its plain
+ * CSS tint in every one of those cases.
  */
 
 const ACTIVE_CLASS = 'bc-webgl-active'
@@ -25,7 +33,7 @@ const VERTEX_SOURCE = `
 attribute vec2 a_pos;
 varying vec2 v_uv;
 void main () {
-    v_uv = vec2(a_pos.x * 0.5 + 0.5, 0.5 - a_pos.y * 0.5);
+    v_uv = a_pos * 0.5 + 0.5;
     gl_Position = vec4(a_pos, 0.0, 1.0);
 }
 `
@@ -36,7 +44,9 @@ void main () {
 // echo the heading band. A pointer spotlight adds a specular highlight
 // that follows the cursor, with a rim sheen where the light is close to
 // an edge; a 1/255 dither breaks up gradient banding on flat surfaces.
-// Premultiplied output against ONE / ONE_MINUS_SRC_ALPHA.
+// v_uv.y runs 1 at the bottom (GL-viewport orientation); the blit flips
+// atlas rows back into CSS orientation. Premultiplied output against
+// ONE / ONE_MINUS_SRC_ALPHA.
 const FRAGMENT_SOURCE = `
 precision highp float;
 varying vec2 v_uv;
@@ -77,17 +87,19 @@ float fbm(vec2 p) {
 void main() {
     float t = u_time;
     vec2 e = max(u_size, vec2(0.001));
-    vec2 p = (v_uv - 0.5) * e * 3.0;
+    vec2 p = (vec2(v_uv.x, 1.0 - v_uv.y) - 0.5) * e * 3.0;
 
     vec2 q = vec2(fbm(p + vec2(0.0, t * 0.05)), fbm(p + vec2(5.2, 1.3) - t * 0.04));
     vec2 r = vec2(fbm(p + 3.0 * q + vec2(1.7, 9.2) + t * 0.035),
                   fbm(p + 3.0 * q + vec2(8.3, 2.8) - t * 0.045));
     float f = fbm(p + 3.2 * r);
 
-    float topFade = mix(1.0, 0.55, v_uv.y);
+    // v_uv.y runs 1 at the element top (GL orientation): the silk is
+    // brighter there, echoing the heading band.
+    float topFade = mix(0.55, 1.0, v_uv.y);
     float body = smoothstep(0.26, 0.92, f) * topFade;
 
-    vec2 puv = (u_pointer.xy - 0.5) * e * 3.0;
+    vec2 puv = (vec2(u_pointer.x, 1.0 - u_pointer.y) - 0.5) * e * 3.0;
     vec2 pp = p - puv;
     float glow = exp(-dot(pp, pp) * 1.5) * u_pointer.w;
     vec2 edge = e * (0.5 - abs(v_uv - 0.5)) * 3.0;
@@ -108,6 +120,8 @@ let entries = []
 let frame = null
 let probe = null
 let tint = { color: [0.357, 0.42, 1.0], strength: 0 }
+let master = null
+let atlasDirty = true
 
 const reducedMotion = () =>
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -176,35 +190,188 @@ const compile = (gl, type, source) => {
     return shader
 }
 
-const draw = (entry, seconds) => {
-    const { gl, program, uniforms, width, height } = entry
+// Release every surface to its CSS fallback; the master context died
+// (driver reset) or could never be created. One-shot per page session —
+// the plain CSS tint stands again everywhere.
+const teardownAll = () => {
+    master = null
+
+    for (const entry of entries) {
+        entry.ro.disconnect()
+        entry.io.disconnect()
+        entry.el.classList.remove(ACTIVE_CLASS)
+        entry.canvas.remove()
+    }
+
+    entries = []
+    atlasDirty = true
+
+    if (frame !== null) {
+        cancelAnimationFrame(frame)
+        frame = null
+    }
+}
+
+const ensureMaster = () => {
+    if (master) {
+        return master
+    }
+
+    const canvas = document.createElement('canvas')
+    let gl = null
+
+    try {
+        gl = canvas.getContext('webgl2', { alpha: true, antialias: false, preserveDrawingBuffer: true })
+            || canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: true })
+    } catch (e) {
+        gl = null
+    }
+
+    if (! gl) {
+        return null
+    }
+
+    canvas.addEventListener('webglcontextlost', (event) => {
+        event.preventDefault()
+        teardownAll()
+    })
+
+    const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX_SOURCE)
+    const fragment = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SOURCE)
+
+    if (! vertex || ! fragment) {
+        return null
+    }
+
+    const program = gl.createProgram()
+
+    gl.attachShader(program, vertex)
+    gl.attachShader(program, fragment)
+    gl.linkProgram(program)
+
+    if (! gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        return null
+    }
+
+    // One fullscreen triangle reused for every surface; the per-surface
+    // area is selected with the viewport.
+    const buffer = gl.createBuffer()
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
+
+    const position = gl.getAttribLocation(program, 'a_pos')
+
+    gl.enableVertexAttribArray(position)
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+
+    master = {
+        canvas,
+        gl,
+        buffer,
+        program,
+        uniforms: {
+            time: gl.getUniformLocation(program, 'u_time'),
+            color: gl.getUniformLocation(program, 'u_color'),
+            strength: gl.getUniformLocation(program, 'u_strength'),
+            size: gl.getUniformLocation(program, 'u_size'),
+            pointer: gl.getUniformLocation(program, 'u_pointer'),
+        },
+    }
+
+    return master
+}
+
+// Shelf-pack the live surfaces into vertical atlas rows and grow the
+// master canvas to fit (reallocation is rare; shrinking is pointless).
+const layoutAtlas = (m) => {
+    let width = 1
+    let height = 1
+
+    for (const entry of entries) {
+        if (entry.width < 1 || entry.height < 1) {
+            entry.ax = -1
+
+            continue
+        }
+
+        entry.ax = 0
+        entry.ay = height
+        width = Math.max(width, entry.width)
+        height += entry.height
+    }
+
+    if (width > m.canvas.width || height > m.canvas.height) {
+        m.canvas.width = Math.max(m.canvas.width, width, 512)
+        m.canvas.height = Math.max(m.canvas.height, height, 512)
+
+        // Resizing the drawing buffer resets the attribute binding.
+        m.gl.bindBuffer(m.gl.ARRAY_BUFFER, m.buffer)
+
+        const position = m.gl.getAttribLocation(m.program, 'a_pos')
+
+        m.gl.enableVertexAttribArray(position)
+        m.gl.vertexAttribPointer(position, 2, m.gl.FLOAT, false, 0, 0)
+    }
+}
+
+const renderSurface = (m, entry, seconds) => {
+    const { gl, uniforms } = m
     const cfg = config() || {}
     const intensity = cfg.intensity === undefined ? 1 : cfg.intensity
-
     const pointer = entry.pointer
 
     pointer.w = reducedMotion()
         ? pointer.target
         : pointer.w + (pointer.target - pointer.w) * 0.09
 
-    gl.viewport(0, 0, width, height)
-    gl.clearColor(0, 0, 0, 0)
-    gl.clear(gl.COLOR_BUFFER_BIT)
-    gl.useProgram(program)
     gl.uniform1f(uniforms.time, seconds)
     gl.uniform3fv(uniforms.color, tint.color)
     gl.uniform1f(uniforms.strength, Math.min(1, (0.35 + tint.strength * 0.65) * intensity))
-    gl.uniform2f(uniforms.size, width / Math.max(width, height), height / Math.max(width, height))
+    gl.uniform2f(uniforms.size, entry.width / Math.max(entry.width, entry.height), entry.height / Math.max(entry.width, entry.height))
     gl.uniform4f(uniforms.pointer, pointer.x, pointer.y, 0, pointer.w)
+    gl.viewport(entry.ax, m.canvas.height - entry.ay - entry.height, entry.width, entry.height)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 }
 
-const paint = (entry) => draw(entry, performance.now() / 1000)
+// Copy a GL atlas row (origin bottom-left) into the element's CSS canvas
+// (origin top-left), flipping rows back into screen orientation.
+const blit = (entry, m) => {
+    const ctx = entry.ctx
 
-const tick = () => {
-    frame = null
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, entry.width, entry.height)
+    ctx.translate(0, entry.height)
+    ctx.scale(1, -1)
+    ctx.drawImage(m.canvas, entry.ax, m.canvas.height - entry.ay - entry.height, entry.width, entry.height, 0, 0, entry.width, entry.height)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+}
+
+const render = () => {
+    const m = ensureMaster()
+
+    if (! m) {
+        teardownAll()
+
+        return false
+    }
+
+    if (atlasDirty) {
+        layoutAtlas(m)
+        atlasDirty = false
+    }
 
     const seconds = performance.now() / 1000
+    const { gl } = m
+
+    gl.useProgram(m.program)
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.buffer)
+    gl.viewport(0, 0, m.canvas.width, m.canvas.height)
+    gl.clearColor(0, 0, 0, 0)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+
     let anyVisible = false
 
     for (const entry of entries.slice()) {
@@ -214,20 +381,38 @@ const tick = () => {
             entry.el.classList.remove(ACTIVE_CLASS)
             entry.canvas.remove()
             entries.splice(entries.indexOf(entry), 1)
+            atlasDirty = true
 
             continue
         }
 
-        if (entry.visible) {
-            anyVisible = true
+        if (! entry.visible || entry.ax < 0) {
+            continue
+        }
 
-            draw(entry, seconds)
+        anyVisible = true
+
+        renderSurface(m, entry, seconds)
+    }
+
+    for (const entry of entries) {
+        if (entry.visible && entry.ax >= 0) {
+            blit(entry, m)
         }
     }
 
+    return anyVisible
+}
+
+const tick = () => {
+    frame = null
+
+    const anyVisible = render()
+
     if (entries.length === 0 || document.hidden || reducedMotion() || ! anyVisible) {
         // Parked: an IntersectionObserver (back on screen), the
-        // visibilitychange or the reduced-motion listener resumes.
+        // visibilitychange, a pointer move or the reduced-motion
+        // listener resumes.
         return
     }
 
@@ -249,72 +434,34 @@ const register = (el) => {
         return
     }
 
+    if (! ensureMaster()) {
+        return
+    }
+
     const cfg = config() || {}
     const maxDpr = cfg.maxDpr === undefined ? 1.5 : cfg.maxDpr
 
     const canvas = document.createElement('canvas')
+
     canvas.className = CANVAS_CLASS
     canvas.setAttribute('aria-hidden', 'true')
 
-    const gl = (() => {
-        try {
-            return canvas.getContext('webgl2', { alpha: true, antialias: false, preserveDrawingBuffer: true })
-                || canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: true })
-        } catch (e) {
-            return null
-        }
-    })()
+    const ctx = canvas.getContext('2d')
 
-    if (! gl) {
+    if (! ctx) {
         return
     }
-
-    const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX_SOURCE)
-    const fragment = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SOURCE)
-
-    if (! vertex || ! fragment) {
-        return
-    }
-
-    const program = gl.createProgram()
-
-    gl.attachShader(program, vertex)
-    gl.attachShader(program, fragment)
-    gl.linkProgram(program)
-
-    if (! gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        return
-    }
-
-    // One fullscreen triangle; no per-element buffer churn.
-    const buffer = gl.createBuffer()
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
-
-    const position = gl.getAttribLocation(program, 'a_pos')
-
-    gl.enableVertexAttribArray(position)
-    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0)
-    gl.enable(gl.BLEND)
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 
     const entry = {
         el,
         canvas,
-        gl,
-        program,
-        uniforms: {
-            time: gl.getUniformLocation(program, 'u_time'),
-            color: gl.getUniformLocation(program, 'u_color'),
-            strength: gl.getUniformLocation(program, 'u_strength'),
-            size: gl.getUniformLocation(program, 'u_size'),
-            pointer: gl.getUniformLocation(program, 'u_pointer'),
-        },
-        pointer: { x: 0.5, y: 0.5, w: 0, target: 0 },
+        ctx,
         visible: true,
         width: 0,
         height: 0,
+        ax: -1,
+        ay: 0,
+        pointer: { x: 0.5, y: 0.5, w: 0, target: 0 },
         ro: null,
         io: null,
     }
@@ -329,29 +476,11 @@ const register = (el) => {
             entry.height = height
             canvas.width = width
             canvas.height = height
-
-            paint(entry)
+            atlasDirty = true
         }
 
         schedule()
     }
-
-    entry.ro = new ResizeObserver(resize)
-    entry.ro.observe(el)
-
-    entry.io = new IntersectionObserver((records) => {
-        let resumed = false
-
-        for (const record of records) {
-            entry.visible = record.isIntersecting
-
-            resumed ||= record.isIntersecting
-        }
-
-        if (resumed) {
-            schedule()
-        }
-    })
 
     el.addEventListener('pointermove', (ev) => {
         const rect = el.getBoundingClientRect()
@@ -373,10 +502,28 @@ const register = (el) => {
         }
     })
 
+    entry.ro = new ResizeObserver(resize)
+    entry.ro.observe(el)
+
+    entry.io = new IntersectionObserver((records) => {
+        let resumed = false
+
+        for (const record of records) {
+            entry.visible = record.isIntersecting
+
+            resumed ||= record.isIntersecting
+        }
+
+        if (resumed) {
+            schedule()
+        }
+    })
+
     el.classList.add(ACTIVE_CLASS)
     el.appendChild(canvas)
 
     entries.push(entry)
+    atlasDirty = true
 
     entry.io.observe(el)
 
@@ -436,10 +583,7 @@ export function bootWebgl () {
 
     document.addEventListener('ddfsn:tint', () => {
         refreshTint()
-
-        for (const entry of entries) {
-            paint(entry)
-        }
+        schedule()
     })
 
     document.addEventListener('visibilitychange', () => {
