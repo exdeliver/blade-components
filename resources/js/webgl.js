@@ -198,8 +198,8 @@ const register = (el) => {
 
     const gl = (() => {
         try {
-            return canvas.getContext('webgl2', { alpha: true, antialias: false })
-                || canvas.getContext('webgl', { alpha: true, antialias: false })
+            return canvas.getContext('webgl2', { alpha: true, antialias: false, preserveDrawingBuffer: true })
+                || canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: true })
         } catch (e) {
             return null
         }
