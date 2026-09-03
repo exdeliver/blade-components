@@ -224,3 +224,30 @@ window.DDFSN.setTint(null) // back to the configured defaults
 ```
 
 The override is persisted in localStorage (`ddfsn.tint`) and restored before first paint by the `@ddfsnAppearance` script, so a reload never flashes the untinted surfaces.
+
+## WebGL surface effects
+
+The tint can also be rendered as a live WebGL glow: instead of the static gradient, tagged elements get a canvas behind their content painting three soft blobs of the tint colour drifting slowly across the surface. Enable it in `config/blade-components.php`:
+
+```php
+'webgl' => [
+    'enabled' => true,
+    'components' => [        // per-component on/off; unlisted keys count as enabled
+        'card' => true,
+        'header' => true,
+        'sidebar' => true,
+    ],
+    'intensity' => 1.0,      // glow opacity scale, on top of the tint strength
+    'max_dpr' => 1.5,        // render-resolution cap
+],
+```
+
+Elements opt in by tagging themselves with a component key — the package's `card`, `header` and `sidebar` components already do:
+
+```html
+<div data-bc-webgl="card" class="bc-surface rounded-lg">...</div>
+```
+
+The glow re-reads the live `--tint`/`--tint-strength` values, so `window.DDFSN.setTint()` moves it with the CSS tint. While a canvas renders, the static gradient steps aside (`.bc-webgl-active`); everything else about the surface — background colour, borders, rounding — is untouched.
+
+Degradation is silent and total: no WebGL context, an element scrolled out of view, a hidden tab or `prefers-reduced-motion` (which paints a single static frame) all leave the plain CSS tint standing, pixel-identical to the effect at rest. The renderer is one shared animation loop that parks itself when nothing visible needs a new frame; canvases are capped at `max_dpr` and released with their element.

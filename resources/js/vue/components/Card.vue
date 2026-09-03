@@ -1,6 +1,7 @@
 <template>
     <div
         data-slot="card"
+        data-bc-webgl="card"
         :class="classes"
     >
         <slot />

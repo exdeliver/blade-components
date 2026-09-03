@@ -1,6 +1,7 @@
 import { defineElement } from './utils.js'
 import { Sidebar, SidebarToggle } from './sidebar.js'
 import { State } from './state.js'
+import { bootWebgl } from './webgl.js'
 
 defineElement("sidebar", Sidebar);
 defineElement("sidebar-toggle", SidebarToggle);
@@ -10,3 +11,5 @@ document.addEventListener('alpine:init', () => {
 
     state.boot();
 });
+
+bootWebgl()

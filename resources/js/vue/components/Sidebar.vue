@@ -4,10 +4,10 @@
          component and mount this component inside itself, recursively. -->
     <!-- v-if/v-else branches disable Vue's automatic attribute fallthrough,
          so consumer attrs (class, ...) are bound explicitly. -->
-    <ddfsn-sidebar v-if="isVanillaTag" ref="root" data-slot="sidebar" :class="classes" :sticky="sticky ? '' : null" :fixed="fixed ? '' : null" data-ddfsn-sidebar-cloak v-bind="$attrs">
+    <ddfsn-sidebar v-if="isVanillaTag" ref="root" data-slot="sidebar" data-bc-webgl="sidebar" :class="classes" :sticky="sticky ? '' : null" :fixed="fixed ? '' : null" data-ddfsn-sidebar-cloak v-bind="$attrs">
         <slot />
     </ddfsn-sidebar>
-    <component v-else :is="tag" ref="root" data-slot="sidebar" :class="classes" :sticky="sticky ? '' : null" :fixed="fixed ? '' : null" data-ddfsn-sidebar-cloak v-bind="$attrs">
+    <component v-else :is="tag" ref="root" data-slot="sidebar" data-bc-webgl="sidebar" :class="classes" :sticky="sticky ? '' : null" :fixed="fixed ? '' : null" data-ddfsn-sidebar-cloak v-bind="$attrs">
         <slot />
     </component>
 </template>

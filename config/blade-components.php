@@ -228,4 +228,38 @@ return [
         'fade' => (int) env('BLADE_COMPONENTS_TINT_FADE', 0),
         'band' => (int) env('BLADE_COMPONENTS_TINT_BAND', 48),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | WebGL surface effects
+    |--------------------------------------------------------------------------
+    |
+    | Renders the surface tint as a live WebGL glow (drifting blobs of the
+    | tint colour, composited behind the element's content) instead of the
+    | static CSS gradient on elements opting in with a
+    | data-bc-webgl="<component>" attribute. Purely decorative: browsers
+    | without a WebGL context, or with prefers-reduced-motion honoured at
+    | rest, silently keep the CSS tint.
+    |
+    | "components" maps each component key to a boolean; a tagged element
+    | only participates when its key is enabled (keys absent from the map
+    | count as enabled). "intensity" scales the glow's opacity on top of
+    | the tint strength, and "max_dpr" caps the render resolution so
+    | high-density displays don't multiply the fill cost.
+    |
+    */
+
+    'webgl' => [
+        'enabled' => filter_var(env('BLADE_COMPONENTS_WEBGL', false), FILTER_VALIDATE_BOOLEAN),
+
+        'components' => [
+            'card' => true,
+            'header' => true,
+            'sidebar' => true,
+        ],
+
+        'intensity' => (float) env('BLADE_COMPONENTS_WEBGL_INTENSITY', 1.0),
+
+        'max_dpr' => (float) env('BLADE_COMPONENTS_WEBGL_MAX_DPR', 1.5),
+    ],
 ];

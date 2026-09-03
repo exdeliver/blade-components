@@ -81,7 +81,8 @@ class ThemeManager
 
     public static function renderStyles(): string
     {
-        // Theme variables first, then the configured surface tint — both
+        // Theme variables first, then the configured surface tint and WebGL
+        // effect styles — all
         // flow through here so they share one response and one cache-bust
         // hash (hashStyles() below). The tint receives the definitions so
         // foreground mode can re-tint each theme's own tokens.
@@ -89,7 +90,7 @@ class ThemeManager
 
         return View::make('blade-components::styles', [
             'definitions' => $definitions,
-        ])->render().SurfaceTint::render($definitions);
+        ])->render().SurfaceTint::render($definitions).WebglEffects::render();
     }
 
     public static function hashStyles(): string

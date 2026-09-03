@@ -11,7 +11,7 @@ namespace DistortedFusion\BladeComponents;
  * consumed through ThemeManager::renderStyles() so the values are part of
  * the stylesheet served by `@ddfsnStyles` — and of its cache-bust hash.
  *
- * @see \DistortedFusion\BladeComponents\ThemeManager::renderStyles()
+ * @see ThemeManager::renderStyles()
  */
 class SurfaceTint
 {
@@ -28,7 +28,7 @@ class SurfaceTint
     ];
 
     /**
-     * @param  array<string, array<string, string>>  $definitions  ThemeManager definitions, keyed by their CSS selector.
+     * @param array<string, array<string, string>> $definitions themeManager definitions, keyed by their CSS selector
      */
     public static function render(array $definitions = []): string
     {

@@ -55,6 +55,7 @@ import TableRow from './components/TableRow.vue'
 import ThreeDot from './components/ThreeDot.vue'
 import Ul from './components/Ul.vue'
 import { SIDEBAR_EVENTS } from './sidebar-core.js'
+import { bootWebgl } from '../webgl.js'
 import { useParallax } from './parallax.js'
 import { useDdfsn } from './state.js'
 
@@ -127,6 +128,7 @@ export default {
 
         if (typeof window !== "undefined") {
             useDdfsn();
+            bootWebgl();
         }
     },
 }

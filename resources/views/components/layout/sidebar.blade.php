@@ -5,7 +5,7 @@ use DistortedFusion\BladeComponents\BladeComponents;
 <x-dynamic-component
     :component="BladeComponents::componentAliasWithPrefix('sidebar-backdrop')" />
 
-<ddfsn-sidebar data-slot="sidebar" {{ $attributes->class([
+<ddfsn-sidebar data-slot="sidebar" data-bc-webgl="sidebar" {{ $attributes->class([
     '[grid-area:sidebar]' => ! $fixed,
     'flex flex-col gap-4 z-20',
 

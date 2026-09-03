@@ -2,7 +2,7 @@
 use Illuminate\Support\Str;
 @endphp
 @props(['style' => 'default'])
-<div data-slot="card" {{ $attributes->class([
+<div data-slot="card" data-bc-webgl="card" {{ $attributes->class([
     'w-full flex flex-col gap-4 rounded-[var(--radius)]',
 
     'py-4' => ! Str::contains($attributes->get('class'), ['p-', 'py-', 'pt-', 'pb-']),

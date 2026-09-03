@@ -100,10 +100,12 @@ class AssetManager
     public static function ddfsnAppearance(array $options = []): string
     {
         $nonce = isset($options['nonce']) ? ' nonce="'.$options['nonce'].'"' : '';
+        $webgl = json_encode(WebglEffects::browserConfig());
 
         return <<<HTML
 <script$nonce>
     window.DDFSN = {
+        webgl: {$webgl},
         applyAppearance (appearance) {
             let applyClass = (className) => document.documentElement.classList.add(className);
             let removeClass = (className) => document.documentElement.classList.remove(className);
@@ -144,12 +146,16 @@ class AssetManager
                 root.removeProperty('--tint-strength')
                 root.removeProperty('--tint-fade')
 
+                document.dispatchEvent(new CustomEvent('ddfsn:tint'))
+
                 return
             }
 
             if (stored.color) root.setProperty('--tint', stored.color)
             if (stored.strength != null) root.setProperty('--tint-strength', stored.strength + '%')
             if (stored.fade != null) root.setProperty('--tint-fade', stored.fade + '%')
+
+            document.dispatchEvent(new CustomEvent('ddfsn:tint'))
         }
     }
 

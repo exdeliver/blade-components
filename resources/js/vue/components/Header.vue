@@ -1,6 +1,7 @@
 <template>
     <header
         data-slot="header"
+        data-bc-webgl="header"
         :class="classes"
         :sticky="sticky ? '' : null"
         :fixed="fixed ? '' : null"

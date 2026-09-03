@@ -2,7 +2,7 @@
 use DistortedFusion\BladeComponents\BladeComponents;
 @endphp
 @props(['container' => null, 'sticky' => false, 'fixed' => false])
-<header data-slot="header" {{ $attributes->class([
+<header data-slot="header" data-bc-webgl="header" {{ $attributes->class([
     '[grid-area:header]',
     'flex items-center justify-between gap-2 z-10',
 
