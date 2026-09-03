@@ -557,6 +557,16 @@ export function bootWebgl () {
 
     booted = true
 
+    // Small debug handle for verification runs; harmless in production.
+    window.__bcWebgl = () => ({
+        master: master ? { w: master.canvas.width, h: master.canvas.height } : null,
+        atlasDirty,
+        entries: entries.map((e) => ({
+            w: e.width, h: e.height, ax: e.ax, ay: e.ay, visible: e.visible,
+            key: e.el.getAttribute('data-bc-webgl'),
+        })),
+    })
+
     const start = () => {
         refreshTint()
         scan(document.documentElement)
