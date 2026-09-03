@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Configurable surface tint: the `tint` option in `blade-components.php` renders `--tint*` custom properties and a `.bc-surface` utility into the `@ddfsnStyles` stylesheet, mixing a single colour into the theme background across solid component surfaces, with an optional hard-edged heading band for the classic "card with header" two-tone. `window.DDFSN.setTint()` overrides it per browser (persisted in localStorage, restored pre-paint).
+- Inverted stacking hierarchy: `.bc-surface` now tints the theme's lifted `--muted` base instead of `--background`, so dark themes show a dark canvas under lifted tinted surfaces and light themes the mirror image. Apps should paint their page canvas with `--background`.
+- Inverted tint (opt-in): `tint.mode` set to `foreground` keeps backgrounds exactly as themed and moves the tint into the `--foreground`/`--muted-foreground` tokens themselves, re-blended per theme from new `--base-*` token copies served by the stylesheet.
 
 ### Fixed
 

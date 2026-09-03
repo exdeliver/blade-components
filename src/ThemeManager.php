@@ -83,10 +83,13 @@ class ThemeManager
     {
         // Theme variables first, then the configured surface tint — both
         // flow through here so they share one response and one cache-bust
-        // hash (hashStyles() below).
+        // hash (hashStyles() below). The tint receives the definitions so
+        // foreground mode can re-tint each theme's own tokens.
+        $definitions = static::definitions();
+
         return View::make('blade-components::styles', [
-            'definitions' => static::definitions(),
-        ])->render().SurfaceTint::render();
+            'definitions' => $definitions,
+        ])->render().SurfaceTint::render($definitions);
     }
 
     public static function hashStyles(): string

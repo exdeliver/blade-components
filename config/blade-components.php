@@ -191,9 +191,12 @@ return [
     |
     | Tint applied to solid component surfaces through the `.bc-surface`
     | utility. A single colour is mixed into the active theme's
-    | `--background` (so the same settings work in light and dark), and the
-    | top of each surface is lifted into a discrete lighter heading band,
-    | producing the classic "card with header" two-tone.
+    | `--muted` — the theme's lifted surface base: dark themes put it
+    | above `--background`, light themes below, so surfaces always read
+    | as sitting on top of the canvas (dark→light back-to-front in dark,
+    | light→dark in light). The top of each surface is lifted into a
+    | discrete lighter heading band, producing the classic "card with
+    | header" two-tone.
     |
     | The values are rendered as `--tint*` CSS custom properties and the
     | `.bc-surface` class through the stylesheet served by `@ddfsnStyles`,
@@ -202,8 +205,14 @@ return [
     | — persisted in localStorage (`ddfsn.tint`) and restored pre-paint by
     | the `@ddfsnAppearance` script.
     |
-    | color:     Hex colour mixed into the theme background. Keep it hex;
-    |            the documented runtime picker only understands #RRGGBB.
+    | color:     Hex colour mixed into the theme's surface base. Keep it
+    |            hex; the documented runtime picker only understands
+    |            #RRGGBB.
+    | mode:      "surface" (default) — tints solid backgrounds like above.
+    |            "foreground" — inverted: backgrounds stay exactly as
+    |            themed and the tint moves into the foreground tokens
+    |            (text picks up a hue of the tint, blended live via
+    |            strength). "fade"/"band" only affect surface mode.
     | strength:  0-24 — percentage of tint mixed into solid surfaces.
     | fade:      0-16 — extra tint in the top heading band of each surface
     |            (hard-edged). 0 = uniform tint; higher = more pronounced
@@ -214,6 +223,7 @@ return [
 
     'tint' => [
         'color' => env('BLADE_COMPONENTS_TINT_COLOR', '#5b6cff'),
+        'mode' => env('BLADE_COMPONENTS_TINT_MODE', 'surface'),
         'strength' => (int) env('BLADE_COMPONENTS_TINT_STRENGTH', 0),
         'fade' => (int) env('BLADE_COMPONENTS_TINT_FADE', 0),
         'band' => (int) env('BLADE_COMPONENTS_TINT_BAND', 48),

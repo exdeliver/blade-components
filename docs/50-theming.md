@@ -192,8 +192,9 @@ Solid component surfaces — panels, cards, menus — can carry a subtle tint of
 
 ```php
 'tint' => [
-    'color' => '#5b6cff',   // hex colour mixed into the theme background
-    'strength' => 0,        // 0-24, percentage of tint in solid surfaces
+    'color' => '#5b6cff',   // hex colour mixed into the theme
+    'mode' => 'surface',    // 'surface' tints backgrounds, 'foreground' tints text
+    'strength' => 0,        // 0-24, percentage of tint
     'fade' => 0,            // 0-16, extra tint in the top heading band
     'band' => 48,           // heading band height in pixels
 ],
@@ -208,7 +209,11 @@ The configuration renders `--tint*` CSS custom properties plus a `.bc-surface` u
 </div>
 ```
 
-Because the tint is mixed into the active theme's `--background`, the same settings work in both light and dark variants. With `fade` above zero each surface shows a discrete lighter heading band over a plainer body — the classic "card with header" two-tone — while surfaces shorter than the band simply take the lifted tone as a whole.
+Because the tint is mixed into the active theme's `--muted` — the lifted surface base — surfaces always read as sitting *on top of* the `--background` canvas, and the hierarchy inverts with the appearance automatically: dark themes show near-black canvas under lifted, tinted surfaces (dark to light, back to front), light themes show white canvas under shaded, tinted surfaces (light to dark). With `fade` above zero each surface shows a discrete lighter heading band over a plainer body — the classic "card with header" two-tone — while surfaces shorter than the band simply take the lifted tone as a whole.
+
+### Inverted tint
+
+Prefer dark, exactly-as-themed backgrounds with the colour living in the type instead? Set `'mode' => 'foreground'`: `.bc-surface` stays the plain theme background, and each theme's `--foreground` and `--muted-foreground` tokens are re-blended with the tint — every `text-[var(--foreground)]` in your app picks up the hue with no markup changes. Both themes tint from their own values (the stylesheet ships unmixed `--base-*` copies of every token), and `window.DDFSN.setTint()` still drives the blend live through `--tint-strength`. `fade` and `band` only affect surface mode.
 
 End users can override the installed defaults per browser at runtime:
 
