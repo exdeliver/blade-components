@@ -44,8 +44,8 @@ void main () {
 // echo the heading band. A pointer spotlight adds a specular highlight
 // that follows the cursor, with a rim sheen where the light is close to
 // an edge; a 1/255 dither breaks up gradient banding on flat surfaces.
-// v_uv.y runs 1 at the bottom (GL-viewport orientation); the blit flips
-// atlas rows back into CSS orientation. Premultiplied output against
+// v_uv.y runs 1 at the element top (GL viewport is y-up, matching CSS
+// orientation after the top-rows blit). Premultiplied output against
 // ONE / ONE_MINUS_SRC_ALPHA.
 const FRAGMENT_SOURCE = `
 precision highp float;
@@ -105,11 +105,11 @@ void main() {
     vec2 edge = e * (0.5 - abs(v_uv - 0.5)) * 3.0;
     float rim = smoothstep(0.16, 0.0, min(edge.x, edge.y)) * glow;
 
-    float alpha = clamp(u_strength * (0.10 + body * 0.62) + glow * (0.16 + u_strength * 0.22) + rim * 0.5, 0.0, 0.85);
+    float alpha = clamp(u_strength * (0.04 + body * 0.30) + glow * (0.10 + u_strength * 0.12) + rim * 0.32, 0.0, 0.5);
     vec3 col = u_color + vec3(0.14) * glow + u_color * rim * 0.8;
 
     alpha += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
-    alpha = clamp(alpha, 0.0, 0.85);
+    alpha = clamp(alpha, 0.0, 0.5);
 
     gl_FragColor = vec4(col * alpha, alpha);
 }
@@ -121,7 +121,6 @@ let frame = null
 let probe = null
 let tint = { color: [0.357, 0.42, 1.0], strength: 0 }
 let master = null
-let atlasDirty = true
 
 const reducedMotion = () =>
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -135,8 +134,13 @@ const keyEnabled = (key) => {
     return ! map || map[key] === undefined ? true : map[key] === true
 }
 
-// Resolve any CSS colour (var, hex, name) through the engine itself.
-const resolveColor = (value) => {
+// Normalise any CSS colour (hex, name, oklch, color-mix) to [r,g,b] in
+// 0..1 sRGB: variables are resolved through a hidden probe, then the
+// 2D canvas parser serialises the result back to plain hex, whatever
+// colour space the engine computed it in.
+let rgb255 = null
+
+const parseColor = (value) => {
     if (! probe) {
         probe = document.createElement('span')
         probe.style.display = 'none'
@@ -152,25 +156,57 @@ const resolveColor = (value) => {
         probe.style.color = value
     }
 
-    const computed = getComputedStyle(probe).color || 'rgb(91, 108, 255)'
-    const numbers = computed.match(/[\d.]+/g)
+    const computed = getComputedStyle(probe).color
 
-    if (! numbers || numbers.length < 3) {
-        return [0.357, 0.42, 1.0]
+    rgb255 ??= document.createElement('canvas').getContext('2d')
+
+    rgb255.fillStyle = '#000000'
+    rgb255.fillStyle = computed || ''
+
+    const hex = rgb255.fillStyle
+
+    if (typeof hex !== 'string' || ! hex.startsWith('#') || hex.length < 7) {
+        return null
     }
 
     return [
-        Math.min(1, parseFloat(numbers[0]) / 255),
-        Math.min(1, parseFloat(numbers[1]) / 255),
-        Math.min(1, parseFloat(numbers[2]) / 255),
+        parseInt(hex.slice(1, 3), 16) / 255,
+        parseInt(hex.slice(3, 5), 16) / 255,
+        parseInt(hex.slice(5, 7), 16) / 255,
     ]
+}
+
+const mixRgb = (a, b, t) => [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+]
+
+// Light of the surface's own colour: the card background lifted toward
+// white, so the silk reads as sheen on the component rather than as a
+// coloured overlay.
+const sheenOf = (surface) => surface.map((c) => c + (1 - c) * 0.45)
+
+// The surface colours the shader paints with: the element's own sheen,
+// blended toward the theme tint only as far as the tint strength asks.
+// With tint at 0% the effect is a neutral self-coloured shimmer.
+const refreshEntryColor = (entry) => {
+    const surface = parseColor(getComputedStyle(entry.el).backgroundColor) || [0.17, 0.18, 0.2]
+
+    entry.rgb = mixRgb(sheenOf(surface), tint.color, tint.strength)
+}
+
+const refreshAllColors = () => {
+    for (const entry of entries) {
+        refreshEntryColor(entry)
+    }
 }
 
 const refreshTint = () => {
     const root = getComputedStyle(document.documentElement)
 
     tint = {
-        color: resolveColor(root.getPropertyValue('--tint').trim() || null),
+        color: parseColor(root.getPropertyValue('--tint').trim()) || [0.357, 0.42, 1.0],
         strength: (parseFloat(root.getPropertyValue('--tint-strength')) || 0) / 100,
     }
 }
@@ -204,7 +240,6 @@ const teardownAll = () => {
     }
 
     entries = []
-    atlasDirty = true
 
     if (frame !== null) {
         cancelAnimationFrame(frame)
@@ -272,6 +307,8 @@ const ensureMaster = () => {
         gl,
         buffer,
         program,
+        frames: 0,
+        draws: 0,
         uniforms: {
             time: gl.getUniformLocation(program, 'u_time'),
             color: gl.getUniformLocation(program, 'u_color'),
@@ -284,37 +321,25 @@ const ensureMaster = () => {
     return master
 }
 
-// Shelf-pack the live surfaces into vertical atlas rows and grow the
-// master canvas to fit (reallocation is rare; shrinking is pointless).
-const layoutAtlas = (m) => {
-    let width = 1
-    let height = 1
-
-    for (const entry of entries) {
-        if (entry.width < 1 || entry.height < 1) {
-            entry.ax = -1
-
-            continue
-        }
-
-        entry.ax = 0
-        entry.ay = height
-        width = Math.max(width, entry.width)
-        height += entry.height
+// Grow the scratch surface only when a bigger one shows up (rare after
+// boot; resizing a canvas reallocates its backing store).
+const ensureSize = (m, w, h) => {
+    if (w <= m.canvas.width && h <= m.canvas.height) {
+        return true
     }
 
-    if (width > m.canvas.width || height > m.canvas.height) {
-        m.canvas.width = Math.max(m.canvas.width, width, 512)
-        m.canvas.height = Math.max(m.canvas.height, height, 512)
+    m.canvas.width = Math.max(m.canvas.width, w, 512)
+    m.canvas.height = Math.max(m.canvas.height, h, 512)
 
-        // Resizing the drawing buffer resets the attribute binding.
-        m.gl.bindBuffer(m.gl.ARRAY_BUFFER, m.buffer)
+    // Resizing the drawing buffer resets the attribute binding.
+    m.gl.bindBuffer(m.gl.ARRAY_BUFFER, m.buffer)
 
-        const position = m.gl.getAttribLocation(m.program, 'a_pos')
+    const position = m.gl.getAttribLocation(m.program, 'a_pos')
 
-        m.gl.enableVertexAttribArray(position)
-        m.gl.vertexAttribPointer(position, 2, m.gl.FLOAT, false, 0, 0)
-    }
+    m.gl.enableVertexAttribArray(position)
+    m.gl.vertexAttribPointer(position, 2, m.gl.FLOAT, false, 0, 0)
+
+    return true
 }
 
 const renderSurface = (m, entry, seconds) => {
@@ -328,27 +353,18 @@ const renderSurface = (m, entry, seconds) => {
         : pointer.w + (pointer.target - pointer.w) * 0.09
 
     gl.uniform1f(uniforms.time, seconds)
-    gl.uniform3fv(uniforms.color, tint.color)
+    gl.uniform3fv(uniforms.color, entry.rgb || tint.color)
     gl.uniform1f(uniforms.strength, Math.min(1, (0.35 + tint.strength * 0.65) * intensity))
     gl.uniform2f(uniforms.size, entry.width / Math.max(entry.width, entry.height), entry.height / Math.max(entry.width, entry.height))
     gl.uniform4f(uniforms.pointer, pointer.x, pointer.y, 0, pointer.w)
-    gl.viewport(entry.ax, m.canvas.height - entry.ay - entry.height, entry.width, entry.height)
+    gl.viewport(0, m.canvas.height - entry.height, entry.width, entry.height)
+    m.draws++
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 }
 
-// Copy a GL atlas row (origin bottom-left) into the element's CSS canvas
-// (origin top-left), flipping rows back into screen orientation.
-const blit = (entry, m) => {
-    const ctx = entry.ctx
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.clearRect(0, 0, entry.width, entry.height)
-    ctx.translate(0, entry.height)
-    ctx.scale(1, -1)
-    ctx.drawImage(m.canvas, entry.ax, m.canvas.height - entry.ay - entry.height, entry.width, entry.height, 0, 0, entry.width, entry.height)
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-}
-
+// One scratch pass per surface: clear, render into the scratch bottom
+// rows, flip-blit the patch into the element's 2D canvas (GL origin is
+// bottom-left, CSS origin top-left).
 const render = () => {
     const m = ensureMaster()
 
@@ -358,19 +374,12 @@ const render = () => {
         return false
     }
 
-    if (atlasDirty) {
-        layoutAtlas(m)
-        atlasDirty = false
-    }
-
     const seconds = performance.now() / 1000
     const { gl } = m
 
     gl.useProgram(m.program)
     gl.bindBuffer(gl.ARRAY_BUFFER, m.buffer)
-    gl.viewport(0, 0, m.canvas.width, m.canvas.height)
-    gl.clearColor(0, 0, 0, 0)
-    gl.clear(gl.COLOR_BUFFER_BIT)
+    m.frames++
 
     let anyVisible = false
 
@@ -381,24 +390,30 @@ const render = () => {
             entry.el.classList.remove(ACTIVE_CLASS)
             entry.canvas.remove()
             entries.splice(entries.indexOf(entry), 1)
-            atlasDirty = true
 
             continue
         }
 
-        if (! entry.visible || entry.ax < 0) {
+        if (! entry.visible || entry.width < 1 || entry.height < 1) {
             continue
         }
 
-        anyVisible = true
+        ensureSize(m, entry.width, entry.height)
+
+        gl.viewport(0, 0, m.canvas.width, m.canvas.height)
+        gl.clearColor(0, 0, 0, 0)
+        gl.clear(gl.COLOR_BUFFER_BIT)
 
         renderSurface(m, entry, seconds)
-    }
 
-    for (const entry of entries) {
-        if (entry.visible && entry.ax >= 0) {
-            blit(entry, m)
-        }
+        // A GL viewport at y = H - h lands in the TOP-h rows of the
+        // buffer as 2D sees them (GL origin bottom-left, canvas origin
+        // top-left) — and the viewport's y-up already matches the
+        // element orientation, so the copy is straight, not flipped.
+        entry.ctx.clearRect(0, 0, entry.width, entry.height)
+        entry.ctx.drawImage(m.canvas, 0, 0, entry.width, entry.height, 0, 0, entry.width, entry.height)
+
+        anyVisible = true
     }
 
     return anyVisible
@@ -459,8 +474,7 @@ const register = (el) => {
         visible: true,
         width: 0,
         height: 0,
-        ax: -1,
-        ay: 0,
+        rgb: null,
         pointer: { x: 0.5, y: 0.5, w: 0, target: 0 },
         ro: null,
         io: null,
@@ -476,7 +490,6 @@ const register = (el) => {
             entry.height = height
             canvas.width = width
             canvas.height = height
-            atlasDirty = true
         }
 
         schedule()
@@ -523,7 +536,7 @@ const register = (el) => {
     el.appendChild(canvas)
 
     entries.push(entry)
-    atlasDirty = true
+    refreshEntryColor(entry)
 
     entry.io.observe(el)
 
@@ -559,10 +572,9 @@ export function bootWebgl () {
 
     // Small debug handle for verification runs; harmless in production.
     window.__bcWebgl = () => ({
-        master: master ? { w: master.canvas.width, h: master.canvas.height } : null,
-        atlasDirty,
+        master: master ? { w: master.canvas.width, h: master.canvas.height, frames: master.frames, draws: master.draws } : null,
         entries: entries.map((e) => ({
-            w: e.width, h: e.height, ax: e.ax, ay: e.ay, visible: e.visible,
+            w: e.width, h: e.height, visible: e.visible,
             key: e.el.getAttribute('data-bc-webgl'),
         })),
     })
@@ -593,7 +605,14 @@ export function bootWebgl () {
 
     document.addEventListener('ddfsn:tint', () => {
         refreshTint()
+        refreshAllColors()
         schedule()
+    })
+
+    // Theme flips swap the surface colours underneath the effect.
+    new MutationObserver(refreshAllColors).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'data-theme', 'data-appearance'],
     })
 
     document.addEventListener('visibilitychange', () => {
