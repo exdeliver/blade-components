@@ -185,3 +185,37 @@ class AppServiceProvider extends ServiceProvider
 ```
 
 Now you can add the `.company-theme` or both `.dark .company-theme` classes to your document's `<html>` element and your additional theme will be applied.
+
+## Surface tint
+
+Solid component surfaces — panels, cards, menus — can carry a subtle tint of a single accent colour, configured in `config/blade-components.php`:
+
+```php
+'tint' => [
+    'color' => '#5b6cff',   // hex colour mixed into the theme background
+    'strength' => 0,        // 0-24, percentage of tint in solid surfaces
+    'fade' => 0,            // 0-16, extra tint in the top heading band
+    'band' => 48,           // heading band height in pixels
+],
+```
+
+The configuration renders `--tint*` CSS custom properties plus a `.bc-surface` utility into the stylesheet served by `@ddfsnStyles`. Apply the utility to any solid element:
+
+```html
+<div class="bc-surface rounded-lg border border-[var(--border)]">
+    <div class="border-b border-[var(--border)] p-4">Panel heading</div>
+    <div class="p-4">Panel body</div>
+</div>
+```
+
+Because the tint is mixed into the active theme's `--background`, the same settings work in both light and dark variants. With `fade` above zero each surface shows a discrete lighter heading band over a plainer body — the classic "card with header" two-tone — while surfaces shorter than the band simply take the lifted tone as a whole.
+
+End users can override the installed defaults per browser at runtime:
+
+```js
+window.DDFSN.setTint({ color: '#e0483e', strength: 12, fade: 8 })
+
+window.DDFSN.setTint(null) // back to the configured defaults
+```
+
+The override is persisted in localStorage (`ddfsn.tint`) and restored before first paint by the `@ddfsnAppearance` script, so a reload never flashes the untinted surfaces.

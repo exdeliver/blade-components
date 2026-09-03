@@ -183,4 +183,39 @@ return [
         'list-group.item-button' => Components\ListGroup\ItemBtn::class,
         'list-group.item-link' => Components\ListGroup\Item::class,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Surface tint
+    |--------------------------------------------------------------------------
+    |
+    | Tint applied to solid component surfaces through the `.bc-surface`
+    | utility. A single colour is mixed into the active theme's
+    | `--background` (so the same settings work in light and dark), and the
+    | top of each surface is lifted into a discrete lighter heading band,
+    | producing the classic "card with header" two-tone.
+    |
+    | The values are rendered as `--tint*` CSS custom properties and the
+    | `.bc-surface` class through the stylesheet served by `@ddfsnStyles`,
+    | automatically included in its cache-bust hash. Browsers may override
+    | them at runtime via `window.DDFSN.setTint({ color, strength, fade })`
+    | — persisted in localStorage (`ddfsn.tint`) and restored pre-paint by
+    | the `@ddfsnAppearance` script.
+    |
+    | color:     Hex colour mixed into the theme background. Keep it hex;
+    |            the documented runtime picker only understands #RRGGBB.
+    | strength:  0-24 — percentage of tint mixed into solid surfaces.
+    | fade:      0-16 — extra tint in the top heading band of each surface
+    |            (hard-edged). 0 = uniform tint; higher = more pronounced
+    |            stepped "lifted card header" two-tone.
+    | band:      Height in pixels of the heading band.
+    |
+    */
+
+    'tint' => [
+        'color' => env('BLADE_COMPONENTS_TINT_COLOR', '#5b6cff'),
+        'strength' => (int) env('BLADE_COMPONENTS_TINT_STRENGTH', 0),
+        'fade' => (int) env('BLADE_COMPONENTS_TINT_FADE', 0),
+        'band' => (int) env('BLADE_COMPONENTS_TINT_BAND', 48),
+    ],
 ];

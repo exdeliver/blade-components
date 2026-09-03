@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## TBD
 
+### Added
+
+- Configurable surface tint: the `tint` option in `blade-components.php` renders `--tint*` custom properties and a `.bc-surface` utility into the `@ddfsnStyles` stylesheet, mixing a single colour into the theme background across solid component surfaces, with an optional hard-edged heading band for the classic "card with header" two-tone. `window.DDFSN.setTint()` overrides it per browser (persisted in localStorage, restored pre-paint).
+
 ### Fixed
 
 - Pause transitions during appearance changes, this resolves button flickering when switching between light and/or dark mode.

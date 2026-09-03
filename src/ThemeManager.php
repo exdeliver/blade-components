@@ -81,9 +81,12 @@ class ThemeManager
 
     public static function renderStyles(): string
     {
+        // Theme variables first, then the configured surface tint — both
+        // flow through here so they share one response and one cache-bust
+        // hash (hashStyles() below).
         return View::make('blade-components::styles', [
             'definitions' => static::definitions(),
-        ])->render();
+        ])->render().SurfaceTint::render();
     }
 
     public static function hashStyles(): string

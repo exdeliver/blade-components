@@ -123,10 +123,41 @@ class AssetManager
 
                 removeClass('dark')
             }
+        },
+
+        setTint (tint) {
+            let root = document.documentElement.style
+
+            if (tint === null) {
+                window.localStorage.removeItem('ddfsn.tint')
+            } else {
+                window.localStorage.setItem('ddfsn.tint', JSON.stringify(tint))
+            }
+
+            let stored = JSON.parse(window.localStorage.getItem('ddfsn.tint') || 'null')
+
+            if (! stored) {
+                // Back to the configured defaults: dropping the inline
+                // overrides lets the :root values served by @ddfsnStyles
+                // (config blade-components.tint) show through again.
+                root.removeProperty('--tint')
+                root.removeProperty('--tint-strength')
+                root.removeProperty('--tint-fade')
+
+                return
+            }
+
+            if (stored.color) root.setProperty('--tint', stored.color)
+            if (stored.strength != null) root.setProperty('--tint-strength', stored.strength + '%')
+            if (stored.fade != null) root.setProperty('--tint-fade', stored.fade + '%')
         }
     }
 
     window.DDFSN.applyAppearance(window.localStorage.getItem('ddfsn.appearance') || 'system')
+
+    try {
+        window.DDFSN.setTint(JSON.parse(window.localStorage.getItem('ddfsn.tint') || 'null'))
+    } catch (e) { /* corrupt storage: configured defaults stand */ }
 </script>
 HTML;
     }
