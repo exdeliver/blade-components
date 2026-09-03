@@ -5,9 +5,10 @@
  * `blade-components.webgl` configuration (embedded on window.DDFSN.webgl
  * by the @ddfsnAppearance script) is enabled and the component key is not
  * switched off, a small canvas is mounted inside the element and renders
- * the surface tint as a live glow — slowly flowing "living silk" of the
- * tint colour behind the content, with a specular spotlight that follows
- * the pointer. The canvas sits behind everything (the element gets
+ * the surface tint as a live glow — a coherent ambient light rig: slow
+ * drifting light blobs, a soft bleed along the edges and a pointer
+ * light, sharing one distance falloff, painting the component's own
+ * surface colour. The canvas sits behind everything (the element gets
  * `.bc-webgl-active`, whose CSS places the canvas at z-index:-1 inside an
  * isolated stacking context), and the static CSS tint gradient steps
  * aside while it runs.
@@ -38,15 +39,8 @@ void main () {
 }
 `
 
-// Domain-warped fractal noise ("living silk") in the tint colour: the
-// field is fed through itself (fbm of fbm of fbm) so it flows like slow
-// smoke instead of reading as discrete blobs, faded toward the bottom to
-// echo the heading band. A pointer spotlight adds a specular highlight
-// that follows the cursor, with a rim sheen where the light is close to
-// an edge; a 1/255 dither breaks up gradient banding on flat surfaces.
-// v_uv.y runs 1 at the element top (GL viewport is y-up, matching CSS
-// orientation after the top-rows blit). Premultiplied output against
-// ONE / ONE_MINUS_SRC_ALPHA.
+// Premultiplied output against ONE / ONE_MINUS_SRC_ALPHA; the canvas
+// blit keeps this in the element's own orientation.
 const FRAGMENT_SOURCE = `
 precision highp float;
 varying vec2 v_uv;
@@ -56,60 +50,62 @@ uniform float u_strength;
 uniform vec2 u_size;
 uniform vec4 u_pointer;
 
+// One coherent light rig for the whole surface: three slow drifting
+// light blobs, a soft area light bleeding in from the edges, the
+// pointer light, and a gentle ambient from above. Every source uses
+// the same exp(-d^2 / r^2) falloff, so the field always reads as one
+// physically consistent lighting setup rather than animated noise.
+
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
 }
 
-float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float fbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 4; i++) {
-        v += a * vnoise(p);
-        p = p * 2.03 + vec2(11.7, 3.9);
-        a *= 0.5;
-    }
-    return v;
+float falloff(float d2, float r2) {
+    return exp(-d2 / r2);
 }
 
 void main() {
     float t = u_time;
     vec2 e = max(u_size, vec2(0.001));
-    vec2 p = (vec2(v_uv.x, 1.0 - v_uv.y) - 0.5) * e * 3.0;
 
-    vec2 q = vec2(fbm(p + vec2(0.0, t * 0.05)), fbm(p + vec2(5.2, 1.3) - t * 0.04));
-    vec2 r = vec2(fbm(p + 3.0 * q + vec2(1.7, 9.2) + t * 0.035),
-                  fbm(p + 3.0 * q + vec2(8.3, 2.8) - t * 0.045));
-    float f = fbm(p + 3.2 * r);
+    // Aspect-corrected, element-centred space (y-up, GL orientation).
+    vec2 p = (v_uv - 0.5) * e;
 
-    // v_uv.y runs 1 at the element top (GL orientation): the silk is
-    // brighter there, echoing the heading band.
-    float topFade = mix(0.55, 1.0, v_uv.y);
-    float body = smoothstep(0.26, 0.92, f) * topFade;
+    // --- drifting blobs -------------------------------------------
+    float blobs = 0.0;
 
-    vec2 puv = (vec2(u_pointer.x, 1.0 - u_pointer.y) - 0.5) * e * 3.0;
-    vec2 pp = p - puv;
-    float glow = exp(-dot(pp, pp) * 1.5) * u_pointer.w;
-    vec2 edge = e * (0.5 - abs(v_uv - 0.5)) * 3.0;
-    float rim = smoothstep(0.16, 0.0, min(edge.x, edge.y)) * glow;
+    for (int i = 0; i < 3; i++) {
+        float o = float(i) * 2.4;
+        vec2 c = vec2(sin(t * 0.085 + o), cos(t * 0.062 + o * 1.7)) * vec2(0.34, 0.30);
+        c *= e;
+        float r2 = 0.16 + 0.05 * sin(t * 0.11 + o * 3.1);
+        vec2 d = p - c;
+        blobs += falloff(dot(d, d), r2);
+    }
 
-    float alpha = clamp(u_strength * (0.04 + body * 0.30) + glow * (0.10 + u_strength * 0.12) + rim * 0.32, 0.0, 0.5);
-    vec3 col = u_color + vec3(0.14) * glow + u_color * rim * 0.8;
+    blobs /= 2.4;
+
+    // --- edge light ------------------------------------------------
+    vec2 edge = min(v_uv, 1.0 - v_uv) * e;
+    float edgeLight = falloff(min(edge.x, edge.y) * min(edge.x, edge.y), 0.012);
+
+    // --- pointer light ----------------------------------------------
+    vec2 pd = p - (vec2(u_pointer.x, 1.0 - u_pointer.y) - 0.5) * e;
+    float glow = falloff(dot(pd, pd), 0.10) * u_pointer.w;
+
+    // Coherent shading: light is stronger near the top (ambient from
+    // above) and gathers where a source already lights the edge.
+    float light = blobs * 0.38 + edgeLight * 0.16 + glow * 0.75;
+    light *= mix(0.85, 1.0, v_uv.y);
+    light += edgeLight * glow * 0.45;
+
+    float alpha = clamp(u_strength * 0.02 + light * u_strength * 0.40, 0.0, 0.35);
+    vec3 col = min(u_color * (1.0 + light * 0.45 + glow * 0.25), vec3(1.0));
 
     alpha += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
-    alpha = clamp(alpha, 0.0, 0.5);
+    alpha = clamp(alpha, 0.0, 0.35);
 
     gl_FragColor = vec4(col * alpha, alpha);
 }
