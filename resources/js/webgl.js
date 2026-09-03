@@ -52,6 +52,8 @@ uniform vec4 u_pointer;
 uniform vec4 u_occ[3];
 uniform float u_occSoft[3];
 uniform float u_occCount;
+uniform vec4 u_cast[3];
+uniform float u_castCount;
 
 // One coherent light rig for the whole surface: three slow drifting
 // light blobs, a soft area light bleeding in from the edges, the
@@ -87,6 +89,35 @@ float lightShadow(vec2 p, vec2 l, vec4 occ, float soft) {
     return smoothstep(0.0, soft, band);
 }
 
+// Sharp cast shadow of an interactable control over the surface,
+// projected directly away from a blob (the caster blocks that light),
+// long and dark while the blob glows on it, fading as the light drifts
+// off. Almost no penumbra — the silhouette cuts the lit region.
+float castShadow(vec2 p, vec4 c, vec2 blob, vec2 e, float l) {
+    if (l < 0.04) {
+        return 0.0;
+    }
+
+    vec2 center = (c.xy + c.zw * 0.5 - 0.5) * e;
+
+    // Radial away from the light; when the light sits right on the
+    // caster (pointer hovering it), fall back to the key direction —
+    // upper-right light, cut toward the lower left.
+    vec2 dir = normalize(center - blob + vec2(-0.06, -0.022));
+    vec2 sz = c.zw * e;
+    float len = (sz.x + sz.y) * 0.28 * (0.55 + 1.3 * l);
+    vec2 lo = (c.xy - 0.5) * e + dir * len;
+    vec2 hi = lo + sz;
+
+    if (p.x < lo.x || p.x > hi.x || p.y < lo.y || p.y > hi.y) {
+        return 0.0;
+    }
+
+    float band = min(min(p.x - lo.x, hi.x - p.x), min(p.y - lo.y, hi.y - p.y));
+
+    return l * smoothstep(0.0, 0.004, band);
+}
+
 void main() {
     float t = u_time;
     vec2 e = max(u_size, vec2(0.001));
@@ -97,6 +128,7 @@ void main() {
     // --- drifting blobs, each casting the neighbour shadows -------
     float blobs = 0.0;
     float occl = 1.0;
+    float castCut = 0.0;
 
     for (int i = 0; i < 3; i++) {
         float o = float(i) * 2.4;
@@ -117,6 +149,14 @@ void main() {
 
         blobs += l * (0.08 + 0.92 * sh);
         occl = min(occl, sh);
+
+        for (int k = 0; k < 3; k++) {
+            if (float(k) >= u_castCount) {
+                break;
+            }
+
+            castCut = max(castCut, castShadow(p, u_cast[k], c, e, l));
+        }
     }
 
     blobs /= 2.4;
@@ -142,13 +182,24 @@ void main() {
 
     glow *= 0.08 + 0.92 * psh;
 
+    for (int k = 0; k < 3; k++) {
+        if (float(k) >= u_castCount) {
+            break;
+        }
+
+        vec2 cc = (u_cast[k].xy + u_cast[k].zw * 0.5 - 0.5) * e;
+        vec2 pc = cc - pl;
+        castCut = max(castCut, castShadow(p, u_cast[k], pl, e, falloff(dot(pc, pc), 0.10) * u_pointer.w));
+    }
+
     // Coherent shading: light is stronger near the top (ambient from
     // above) and gathers where a source already lights the edge.
     float light = blobs * 0.38 + edgeLight * 0.16 + glow * 0.75;
     light *= mix(0.85, 1.0, v_uv.y);
     light += edgeLight * glow * 0.45;
+    light *= 1.0 - 0.85 * castCut;
 
-    float shadow = clamp(1.0 - occl, 0.0, 1.0);
+    float shadow = clamp(1.0 - min(occl, 1.0 - castCut), 0.0, 1.0);
 
     float alpha = clamp(u_strength * 0.02 + light * u_strength * 0.40 + shadow * 0.075, 0.0, 0.35);
     vec3 col = min(u_color * (1.0 + light * 0.45 + glow * 0.25), vec3(1.0));
@@ -367,6 +418,8 @@ const ensureMaster = () => {
             occ: gl.getUniformLocation(program, 'u_occ[0]'),
             occSoft: gl.getUniformLocation(program, 'u_occSoft[0]'),
             occCount: gl.getUniformLocation(program, 'u_occCount'),
+            cast: gl.getUniformLocation(program, 'u_cast[0]'),
+            castCount: gl.getUniformLocation(program, 'u_castCount'),
         },
     }
 
@@ -396,6 +449,44 @@ const ensureSize = (m, w, h) => {
 
 const occBuf = new Float32Array(12)
 const occSoftBuf = new Float32Array(3)
+const castBuf = new Float32Array(12)
+
+// Elements tagged data-bc-caster hover over the surfaces and throw a
+// direct cutting shadow across whatever they cover. They own no canvas
+// — they are pure occluders for every surface within reach.
+const casters = []
+
+const INTERACTIVE = 'button, [role="button"], a[href], input, select, textarea, [role="menuitem"], [role="tab"], [role="checkbox"], [role="switch"], [data-bc-caster]'
+
+// Interactable controls over a surface, refreshed on structural
+// changes; rectangles keep up with events via measureAll.
+const refreshCasts = (entry) => {
+    entry.castEls = [...entry.el.querySelectorAll(INTERACTIVE)].filter((el) => {
+        if (el === entry.el || el.tagName === 'CANVAS') {
+            return false
+        }
+
+        const r = el.getBoundingClientRect()
+
+        el.__bcCastRect = r.width >= 6 && r.height >= 6 ? r : null
+
+        return el.__bcCastRect !== null
+    })
+}
+
+const scanCasters = (root) => {
+    const nodes = [...(root.querySelectorAll?.('[data-bc-caster]') || [])]
+
+    if (root.matches?.('[data-bc-caster]')) {
+        nodes.unshift(root)
+    }
+
+    for (const el of nodes) {
+        if (! casters.some((c) => c.el === el)) {
+            casters.push({ el, rect: el.getBoundingClientRect() })
+        }
+    }
+}
 
 // Rectangles are measured on events (resize, scroll, pointer, theme,
 // route swaps) — NEVER inside the frame loop: a getBoundingClientRect
@@ -409,6 +500,20 @@ const measureAll = () => {
     for (const entry of entries) {
         if (entry.el.isConnected) {
             entry.rect = entry.el.getBoundingClientRect()
+        }
+    }
+
+    for (const caster of casters) {
+        if (caster.el.isConnected) {
+            caster.rect = caster.el.getBoundingClientRect()
+        }
+    }
+
+    for (const entry of entries) {
+        for (const el of entry.castEls) {
+            const r = el.getBoundingClientRect()
+
+            el.__bcCastRect = r.width >= 6 && r.height >= 6 ? r : null
         }
     }
 }
@@ -473,6 +578,98 @@ const collectOccluders = (entry) => {
     return n
 }
 
+const collectCasters = (entry, seconds) => {
+    const rect = entry.rect
+
+    if (! rect || rect.width < 1) {
+        return 0
+    }
+
+    const ex = rect.width / Math.max(rect.width, rect.height)
+    const ey = rect.height / Math.max(rect.width, rect.height)
+
+    // Mirror the shader's blob field in UV space so the three casters
+    // we hand to the GPU are the ones the lights are actually falling
+    // on right now — a control only casts while lit.
+    const blobs = []
+
+    for (let i = 0; i < 3; i++) {
+        const o = i * 2.4
+
+        blobs.push({
+            x: 0.5 + Math.sin(seconds * 0.085 + o) * 0.34,
+            y: 0.5 + Math.cos(seconds * 0.062 + o * 1.7) * 0.30,
+            r2: 0.16 + 0.05 * Math.sin(seconds * 0.11 + o * 3.1),
+        })
+    }
+
+    const pointer = entry.pointer
+    const candidates = []
+    const seen = new Set()
+
+    const push = (o) => {
+        if (! o || o.width < 4 || o.height < 4 || seen.has(o)) {
+            return
+        }
+
+        seen.add(o)
+
+        const u = {
+            x: (o.left - rect.left) / rect.width,
+            y: 1 - (o.bottom - rect.top) / rect.height,
+            w: o.width / rect.width,
+            h: o.height / rect.height,
+            score: 0,
+        }
+
+        const cx = u.x + u.w / 2
+        const cy = u.y + u.h / 2
+
+        for (const blob of blobs) {
+            const dx = (cx - blob.x) * ex
+            const dy = (cy - blob.y) * ey
+            const l = Math.exp(-(dx * dx + dy * dy) / blob.r2)
+
+            u.score = Math.max(u.score, l)
+        }
+
+        if (pointer.w > 0.05) {
+            const dx = (cx - pointer.x) * ex
+            const dy = (cy - pointer.y) * ey
+            const l = Math.exp(-(dx * dx + dy * dy) / 0.10) * pointer.w * 1.6
+
+            u.score = Math.max(u.score, l)
+        }
+
+        candidates.push(u)
+    }
+
+    for (const el of entry.castEls) {
+        push(el.__bcCastRect)
+    }
+
+    for (const caster of casters) {
+        if (! entry.el.contains(caster.el)) {
+            push(caster.rect)
+        }
+    }
+
+    candidates.sort((a, b) => b.score - a.score)
+
+    const count = Math.min(candidates.length, 3)
+
+    for (let i = 0; i < count; i++) {
+        const u = candidates[i]
+
+        castBuf[i * 4] = u.x
+        castBuf[i * 4 + 1] = u.y
+        castBuf[i * 4 + 2] = u.w
+        castBuf[i * 4 + 3] = u.h
+    }
+
+    return count
+}
+
 const renderSurface = (m, entry, seconds) => {
     const { gl, uniforms } = m
     const cfg = config() || {}
@@ -498,6 +695,14 @@ const renderSurface = (m, entry, seconds) => {
         gl.uniform1fv(uniforms.occSoft, occSoftBuf)
     }
 
+    const castCount = collectCasters(entry, seconds)
+
+    gl.uniform1f(uniforms.castCount, castCount)
+
+    if (castCount > 0) {
+        gl.uniform4fv(uniforms.cast, castBuf)
+    }
+
     gl.viewport(0, m.canvas.height - entry.height, entry.width, entry.height)
     m.draws++
     gl.drawArrays(gl.TRIANGLES, 0, 3)
@@ -521,6 +726,12 @@ const render = () => {
     gl.useProgram(m.program)
     gl.bindBuffer(gl.ARRAY_BUFFER, m.buffer)
     m.frames++
+
+    for (let i = casters.length - 1; i >= 0; i--) {
+        if (! casters[i].el.isConnected) {
+            casters.splice(i, 1)
+        }
+    }
 
     let anyVisible = false
 
@@ -612,6 +823,7 @@ const register = (el) => {
         el,
         canvas,
         ctx,
+        castEls: [],
         visible: true,
         width: 0,
         height: 0,
@@ -681,6 +893,7 @@ const register = (el) => {
 
     entries.push(entry)
     refreshEntryColor(entry)
+    refreshCasts(entry)
 
     entry.io.observe(el)
 
@@ -688,6 +901,8 @@ const register = (el) => {
 }
 
 const scan = (scope) => {
+    scanCasters(scope)
+
     const found = scope.matches && scope.matches('[data-bc-webgl]')
         ? [scope]
         : []
@@ -751,6 +966,10 @@ export function bootWebgl () {
         }
 
         if (added) {
+            for (const entry of entries) {
+                refreshCasts(entry)
+            }
+
             scheduleMeasure()
         }
     }).observe(document.documentElement, { childList: true, subtree: true })
