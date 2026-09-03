@@ -227,7 +227,7 @@ The override is persisted in localStorage (`ddfsn.tint`) and restored before fir
 
 ## WebGL surface effects
 
-The tint can also be rendered as a live WebGL glow: instead of the static gradient, tagged elements get a canvas behind their content painted by a coherent ambient light rig — a few slow drifting light blobs, a soft bleed of light along the edges and a pointer light, all sharing one distance falloff so the surface reads as genuinely lit rather than animated. The light paints the element’s own surface colour (its background lifted toward light), blended toward the theme tint only as far as the tint strength asks: at 0% strength the effect is a neutral shimmer in the surface’s own colour, never an overlay of a different one. The sheen only picks up the theme tint colour as far as the tint strength asks: at 0% strength the effect is a neutral shimmer in the surface's own colour, never an overlay of a different one. Enable it in `config/blade-components.php`:
+The tint can also be rendered as a live WebGL glow: instead of the static gradient, tagged elements get a canvas behind their content painted by a coherent ambient light rig — a few slow drifting light blobs, a soft bleed of light along the edges and a pointer light, all sharing one distance falloff so the surface reads as genuinely lit rather than animated. The light paints the element’s own surface colour (its background lifted toward light), blended toward the theme tint only as far as the tint strength asks: at 0% strength the effect is a neutral shimmer in the surface’s own colour, never an overlay of a different one. Enable it in `config/blade-components.php`:
 
 ```php
 'webgl' => [
