@@ -88,6 +88,14 @@ canvas.bc-webgl-canvas {
     background-image:none;
 }
 
+/* .bc-field — inputs and textareas as pressed-in wells: the theme's
+   --input well fill plus an inset top shadow, so every field reads as
+   dug into the surface rather than floating on it. */
+.bc-field {
+    background-color:var(--input);
+    box-shadow:inset 0 1px 2px color-mix(in oklab, black 25%, transparent);
+}
+
 /* .bc-depth — a recessed content panel living on a live surface (the
    issue dialog's tab body). Its own semi-opaque tint veil paints over
    the glow canvas underneath: the ambient rig still grazes its edge,

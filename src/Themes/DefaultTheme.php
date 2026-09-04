@@ -77,7 +77,10 @@ class DefaultTheme implements ThemeContract
             ThemeVariable::CARD_FOREGROUND->value => 'var(--foreground)',
 
             ThemeVariable::BORDER->value => 'oklch(92% 0.004 286.32)', // zinc-200
-            ThemeVariable::INPUT->value => 'var(--background)',
+            // Fields are wells pressed into their panel: always a fill darker
+            // than both the canvas and the lifted surface, so they read as
+            // dug-in on light and dark alike.
+            ThemeVariable::INPUT->value => 'color-mix(in oklab,var(--foreground) 9%,var(--background))',
             ThemeVariable::RING->value => 'color-mix(in oklab,var(--primary) 30%,transparent)',
 
             ThemeVariable::SUCCESS->value => 'oklch(72.3% 0.219 149.579)',            // green-500
@@ -113,7 +116,7 @@ class DefaultTheme implements ThemeContract
             ThemeVariable::CARD->value => 'oklch(21% 0.006 285.885)', // zinc-900
 
             ThemeVariable::BORDER->value => 'color-mix(in oklab,var(--foreground) 10%,transparent)',
-            ThemeVariable::INPUT->value => 'color-mix(in oklab,var(--foreground) 5%,transparent)',
+            ThemeVariable::INPUT->value => 'color-mix(in oklab,var(--background) 68%,black)',
 
             ThemeVariable::SUCCESS_FOREGROUND->value => 'oklch(87.1% 0.15 154.449)', // green-300
             ThemeVariable::INFO_FOREGROUND->value => 'oklch(80.9% 0.105 251.813)',   // blue-300
