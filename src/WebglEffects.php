@@ -106,7 +106,7 @@ canvas.bc-webgl-canvas {
     pointer-events:none;
     background-color:color-mix(in oklab, var(--muted) 68%, var(--background));
     opacity:.88;
-    box-shadow:inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent);
+    box-shadow:inset 0 1px 0 color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 
 CSS;
