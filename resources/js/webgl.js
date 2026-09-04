@@ -103,7 +103,9 @@ float castFan(vec2 p, vec4 c, vec2 e, vec2 off) {
     vec2 bl = (c.xy - 0.5) * e;
     vec2 tr = bl + c.zw * e;
 
-    if (p.y > tr.y) {
+    // Hard cut flush with the control's bottom: no overflow is ever
+    // painted at or above the bottom line of the hovered component.
+    if (p.y > bl.y) {
         return 0.0;
     }
 
