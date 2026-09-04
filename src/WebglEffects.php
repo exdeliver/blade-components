@@ -88,6 +88,27 @@ canvas.bc-webgl-canvas {
     background-image:none;
 }
 
+/* .bc-depth — a recessed content panel living on a live surface (the
+   issue dialog's tab body). Its own semi-opaque tint veil paints over
+   the glow canvas underneath: the ambient rig still grazes its edge,
+   but the cutting shadow can no longer sink the panel's contents, and
+   the inset hairline gives the section its own depth step below the
+   surface. Mixes toward --background, so the recess reads darker on
+   dark themes and lighter on light ones, like the page behind. */
+.bc-depth {
+    position:relative;
+}
+.bc-depth::before {
+    content:"";
+    position:absolute;
+    inset:0;
+    z-index:-1;
+    pointer-events:none;
+    background-color:color-mix(in oklab, var(--muted) 68%, var(--background));
+    opacity:.88;
+    box-shadow:inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+
 CSS;
     }
 }

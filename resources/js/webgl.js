@@ -55,6 +55,7 @@ uniform float u_occCount;
 uniform vec4 u_cast[3];
 uniform float u_castCount;
 uniform vec2 u_castLight;
+uniform float u_gain;
 
 // One coherent light rig for the whole surface: three slow drifting
 // light blobs, a soft area light bleeding in from the edges, the
@@ -207,10 +208,15 @@ void main() {
     light += edgeLight * glow * 0.45;
     light *= 1.0 - 0.92 * castCut;
 
-    float shadow = clamp(1.0 - min(occl, 1.0 - castCut), 0.0, 1.0);
+    // Per-surface gain: the whole rig (both the lift and the cast
+    // shadow's darkening) dims toward the flat tint as u_gain drops,
+    // so each page can dial its own brightness. Default is subtle.
+    light *= u_gain;
+
+    float shadow = clamp(1.0 - min(occl, 1.0 - castCut), 0.0, 1.0) * u_gain;
 
     float alpha = clamp(u_strength * 0.02 + light * u_strength * 0.40 + shadow * 0.14, 0.0, 0.42);
-    vec3 col = min(u_color * (1.0 + light * 0.45 + glow * 0.25), vec3(1.0));
+    vec3 col = min(u_color * (1.0 + (light * 0.45 + glow * 0.25) * u_gain), vec3(1.0));
     col *= 1.0 - shadow * 0.78;
 
     alpha += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
@@ -429,6 +435,7 @@ const ensureMaster = () => {
             cast: gl.getUniformLocation(program, 'u_cast[0]'),
             castCount: gl.getUniformLocation(program, 'u_castCount'),
             castLight: gl.getUniformLocation(program, 'u_castLight'),
+            gain: gl.getUniformLocation(program, 'u_gain'),
         },
     }
 
@@ -592,6 +599,10 @@ const collectOccluders = (entry) => {
 // out (never snaps), and its direction is the fixed top-right to
 // bottom-left key cut, allowed to sway with the mouse by only a few
 // degrees before it is clamped and eased.
+// Whole-rig brightness floor for surfaces without data-bc-gain: subtle by
+// default; each page lifts or dims its surfaces with the attribute.
+const GAIN_DEFAULT = 0.72
+
 const CAST_KEY_X = -0.7071
 const CAST_KEY_Y = -0.7071
 
@@ -710,6 +721,7 @@ const renderSurface = (m, entry, seconds) => {
     const castCount = collectCasters(entry)
 
     gl.uniform1f(uniforms.castCount, castCount)
+    gl.uniform1f(uniforms.gain, entry.gain)
     gl.uniform2f(uniforms.castLight, entry.castLightX, entry.castLightY)
 
     if (castCount > 0) {
@@ -871,6 +883,7 @@ const register = (el) => {
         castEase: 0,
         castLightX: CAST_KEY_X,
         castLightY: CAST_KEY_Y,
+        gain: GAIN_DEFAULT,
         visible: true,
         width: 0,
         height: 0,
@@ -879,6 +892,12 @@ const register = (el) => {
         pointer: { x: 0.5, y: 0.5, w: 0, target: 0 },
         ro: null,
         io: null,
+    }
+
+    const gainRaw = parseFloat(el.getAttribute('data-bc-gain'))
+
+    if (Number.isFinite(gainRaw)) {
+        entry.gain = Math.min(1.5, Math.max(0, gainRaw))
     }
 
     const resize = () => {

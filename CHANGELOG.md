@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- WebGL rig: per-surface `data-bc-gain` brightness attribute (whole rig scales toward the flat tint; default `0.72` — subtle overall) and the `.bc-depth` recessed-panel utility — a semi-opaque tint veil over the glow canvas with an inset hairline, so tab bodies and detail panes keep their own depth step and are only grazed, not sunk, by a hovered control's cast shadow.
+
 ## TBD
 
 ### Added

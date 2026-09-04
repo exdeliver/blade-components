@@ -2,6 +2,7 @@
     <div
         data-slot="card"
         data-bc-webgl="card"
+        data-bc-gain="0.62"
         :class="classes"
     >
         <slot />

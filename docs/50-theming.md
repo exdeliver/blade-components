@@ -248,6 +248,8 @@ Elements opt in by tagging themselves with a component key — the package's `ca
 <div data-bc-webgl="card" class="bc-surface rounded-lg">...</div>
 ```
 
+Per surface, `data-bc-gain` dials the whole rig — lift and cast shadow together — toward the flat tint: `0.5` barely whispers, `1` is the full rig, and untagged surfaces get the subtle `0.72` default, so each page can set its own brightness. Content panels that must stay legible under a neighbour's cast shadow (tab bodies, detail panes) take the `bc-depth` class: it paints a semi-opaque tint veil over the canvas behind them and adds an inset hairline, so the panel reads as its own recessed depth step and the shadow only grazes its edge.
+
 The glow re-reads the live `--tint`/`--tint-strength` values, so `window.DDFSN.setTint()` moves it with the CSS tint. While a canvas renders, the static gradient steps aside (`.bc-webgl-active`); everything else about the surface — background colour, borders, rounding — is untouched.
 
 Degradation is silent and total: no WebGL context, an element scrolled out of view, a hidden tab or `prefers-reduced-motion` (which paints a single static frame) all leave the plain CSS tint standing, pixel-identical to the effect at rest. The renderer is one shared animation loop that parks itself when nothing visible needs a new frame; canvases are capped at `max_dpr` and released with their element.
