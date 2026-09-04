@@ -22,6 +22,11 @@ const props = defineProps({
     // the Vue variant renders it as plain text (pass icon markup through
     // the default slot instead).
     icon: { type: String, default: null },
+
+    // Outline badges carry the variant as an outer LINE instead of a
+    // fill: transparent body, tinted text, hairline border in the
+    // variant colour — quieter than filled lozenges inside dense lists.
+    outline: { type: Boolean, default: false },
 })
 
 const classes = computed(() => [
@@ -41,6 +46,16 @@ const classes = computed(() => [
         'text-[var(--info-foreground)] bg-[color-mix(in_oklab,var(--info)_10%,transparent)]': props.variant === 'info',
         'text-[var(--warning-foreground)] bg-[color-mix(in_oklab,var(--warning)_10%,transparent)]': props.variant === 'warning',
         'text-[var(--danger-foreground)] bg-[color-mix(in_oklab,var(--danger)_10%,transparent)]': props.variant === 'danger',
+    },
+
+    // Outline (outer-line) treatment per variant...
+    {
+        'border bg-transparent text-[var(--primary)] border-[color-mix(in_oklab,var(--primary)_45%,transparent)]': props.outline && props.variant === 'primary',
+        'border bg-transparent text-[var(--muted-foreground)] border-[var(--border)]': props.outline && props.variant === 'secondary',
+        'border bg-transparent text-[var(--success)] border-[color-mix(in_oklab,var(--success)_45%,transparent)]': props.outline && props.variant === 'success',
+        'border bg-transparent text-[var(--info)] border-[color-mix(in_oklab,var(--info)_45%,transparent)]': props.outline && props.variant === 'info',
+        'border bg-transparent text-[var(--warning)] border-[color-mix(in_oklab,var(--warning)_45%,transparent)]': props.outline && props.variant === 'warning',
+        'border bg-transparent text-[var(--danger)] border-[color-mix(in_oklab,var(--danger)_45%,transparent)]': props.outline && props.variant === 'danger',
     },
 
     // Icons...
