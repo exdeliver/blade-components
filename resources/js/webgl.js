@@ -54,8 +54,7 @@ uniform float u_occSoft[3];
 uniform float u_occCount;
 uniform vec4 u_cast[3];
 uniform float u_castCount;
-uniform vec2 u_castDir;
-uniform float u_castSpread;
+uniform vec2 u_castLight;
 
 // One coherent light rig for the whole surface: three slow drifting
 // light blobs, a soft area light bleeding in from the edges, the
@@ -91,32 +90,46 @@ float lightShadow(vec2 p, vec2 l, vec4 occ, float soft) {
     return smoothstep(0.0, soft, band);
 }
 
-// One single hard shadow, one hovered control. A true wedge: apex at
-// the control's light-facing corner, two — and only two — perfectly
-// straight edge rays diverging down the fixed top-right to bottom-left
-// key direction. No flare kinks, no notches; the tip simply fades.
+// One single hard shadow, one hovered control. Two — and only two —
+// straight edge lines, each starting at one of the control's bottom
+// corners: they are the light rays grazing the control there, so they
+// diverge naturally down the top-right to bottom-left key direction.
+// Hard edges, soft tip fade, apex line flush at the control's bottom.
 float cross2(vec2 a, vec2 b) {
     return a.x * b.y - a.y * b.x;
 }
 
-float castFan(vec2 p, vec4 c, vec2 e, vec2 dir, float tanS) {
-    vec2 apex = (c.xy - 0.5) * e;
-    vec2 v = p - apex;
-    float t = dot(v, dir);
+float castFan(vec2 p, vec4 c, vec2 e, vec2 off) {
+    vec2 bl = (c.xy - 0.5) * e;
+    vec2 tr = bl + c.zw * e;
 
-    if (t <= 0.0) {
+    if (p.y > tr.y) {
         return 0.0;
     }
 
-    float edge = t * tanS;
-    float dSide = edge - abs(cross2(dir, v));
+    vec2 br = vec2(tr.x, bl.y);
+    vec2 L = (bl + tr) * 0.5 + off;
 
-    if (dSide < 0.0) {
+    vec2 rA = normalize(bl - L);
+    vec2 rB = normalize(br - L);
+    vec2 v = p - L;
+
+    float sA = cross2(rA, v);
+    float sB = cross2(rB, v);
+
+    if (sA * sB >= 0.0) {
         return 0.0;
     }
 
+    vec2 mid = normalize(rA + rB);
+    float t = dot(v, mid) - min(dot(rA, mid) * length(bl - L), dot(rB, mid) * length(br - L));
+
+    if (t < 0.0) {
+        return 0.0;
+    }
+
+    float feather = smoothstep(0.0, 0.006, abs(sA)) * smoothstep(0.0, 0.006, abs(sB));
     float len = min(1.7, 0.85 + (c.z + c.w) * 2.2);
-    float feather = smoothstep(0.0, 0.006, dSide);
     float tip = 1.0 - smoothstep(len * 0.62, len, t);
 
     return feather * tip;
@@ -182,7 +195,7 @@ void main() {
     float castCut = 0.0;
 
     if (u_castCount > 0.0) {
-        castCut = clamp(castFan(p, u_cast[0], e, u_castDir, u_castSpread) * u_castCount, 0.0, 1.0);
+        castCut = clamp(castFan(p, u_cast[0], e, u_castLight) * u_castCount, 0.0, 1.0);
     }
 
     // Coherent shading: light is stronger near the top (ambient from
@@ -413,8 +426,7 @@ const ensureMaster = () => {
             occCount: gl.getUniformLocation(program, 'u_occCount'),
             cast: gl.getUniformLocation(program, 'u_cast[0]'),
             castCount: gl.getUniformLocation(program, 'u_castCount'),
-            castDir: gl.getUniformLocation(program, 'u_castDir'),
-            castSpread: gl.getUniformLocation(program, 'u_castSpread'),
+            castLight: gl.getUniformLocation(program, 'u_castLight'),
         },
     }
 
@@ -578,7 +590,6 @@ const collectOccluders = (entry) => {
 // out (never snaps), and its direction is the fixed top-right to
 // bottom-left key cut, allowed to sway with the mouse by only a few
 // degrees before it is clamped and eased.
-const CAST_BASE = -2.3561945
 const CAST_KEY_X = -0.7071
 const CAST_KEY_Y = -0.7071
 
@@ -645,26 +656,21 @@ const collectCasters = (entry) => {
 
     const hv = entry.castHover
 
-    // Cut direction: always the key diagonal, top-right to bottom
-    // left. Eased once on entry so nothing snaps; no sway.
-    const a = entry.castDirA ?? CAST_BASE
-    let step = CAST_BASE - a
+    // The nearer the light sits to the control, the wider the two
+    // corner rays diverge. Eased so switching casters never snaps.
+    const ex = rect.width / Math.max(rect.width, rect.height)
+    const wantX = 0.03 + hv.w * ex * 1.1
+    const wantY = 0.035 + hv.h
 
-    step = Math.atan2(Math.sin(step), Math.cos(step))
+    const lx = entry.castLightX === CAST_KEY_X
+        ? wantX
+        : entry.castLightX + (wantX - entry.castLightX) * 0.08
+    const ly = entry.castLightY === CAST_KEY_Y
+        ? wantY
+        : entry.castLightY + (wantY - entry.castLightY) * 0.08
 
-    entry.castDirA = a + step * 0.08
-    entry.castDirX = Math.cos(entry.castDirA)
-    entry.castDirY = Math.sin(entry.castDirA)
-
-    // Wedge half-angle from the control's size — big control, big
-    // shadow — eased so switching casters never snaps.
-    const spreadWant = 0.12 + Math.min(0.18, (hv.w + hv.h) * 1.2)
-    const easedSpread = entry.castSpreadWant === undefined
-        ? spreadWant
-        : entry.castSpreadWant + (spreadWant - entry.castSpreadWant) * 0.08
-
-    entry.castSpreadWant = spreadWant
-    entry.castSpread = Math.tan(easedSpread)
+    entry.castLightX = lx
+    entry.castLightY = ly
 
     castBuf[0] = hv.x
     castBuf[1] = hv.y
@@ -702,8 +708,7 @@ const renderSurface = (m, entry, seconds) => {
     const castCount = collectCasters(entry)
 
     gl.uniform1f(uniforms.castCount, castCount)
-    gl.uniform2f(uniforms.castDir, entry.castDirX, entry.castDirY)
-    gl.uniform1f(uniforms.castSpread, entry.castSpread)
+    gl.uniform2f(uniforms.castLight, entry.castLightX, entry.castLightY)
 
     if (castCount > 0) {
         gl.uniform4fv(uniforms.cast, castBuf)
@@ -831,9 +836,8 @@ const register = (el) => {
         ctx,
         castEls: [],
         castEase: 0,
-        castDirX: CAST_KEY_X,
-        castSpread: 0.12,
-        castDirY: CAST_KEY_Y,
+        castLightX: CAST_KEY_X,
+        castLightY: CAST_KEY_Y,
         visible: true,
         width: 0,
         height: 0,
