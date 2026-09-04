@@ -128,7 +128,18 @@ export default {
 
         if (typeof window !== "undefined") {
             useDdfsn();
-            bootWebgl();
+            // Hydration-safe boot: attaching surfaces (canvas + the
+            // bc-webgl-active class) before Vue finishes hydrating SSR
+            // markup makes every lit surface mismatch. Boot after window
+            // load — hydration has long completed by then — via idle so it
+            // never blocks paint; the MutationObserver picks up everything
+            // mounted in between.
+            const deferBoot = () => {
+                const run = () => (window.requestIdleCallback ?? ((cb) => setTimeout(cb, 0)))(() => bootWebgl(), { timeout: 1000 });
+                if (document.readyState === 'complete') run();
+                else window.addEventListener('load', run, { once: true });
+            };
+            deferBoot();
         }
     },
 }
