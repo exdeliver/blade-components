@@ -782,8 +782,39 @@ const render = () => {
     return anyVisible
 }
 
+// Vue hydration strips the injected canvas back off SSR-rendered
+// surfaces (the login card) and patches the element in place, so no
+// MutationObserver refires. Re-attach on a slow beat: an element still
+// in the tree but missing its canvas gets it back; an element that
+// hydration threw away is dropped (its replacement registers through
+// the normal scan when the observer sees it arrive).
+let healFrame = 0
+
+const healEntries = () => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i]
+
+        if (! document.contains(entry.el)) {
+            entry.canvas.remove()
+            entry.io.disconnect()
+            entries.splice(i, 1)
+            continue
+        }
+
+        if (entry.canvas.parentNode !== entry.el) {
+            entry.el.appendChild(entry.canvas)
+        }
+
+        entry.el.classList.add(ACTIVE_CLASS)
+    }
+}
+
 const tick = () => {
     frame = null
+
+    if (++healFrame % 30 === 0) {
+        healEntries()
+    }
 
     const anyVisible = render()
 
