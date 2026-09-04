@@ -54,6 +54,8 @@ uniform float u_occSoft[3];
 uniform float u_occCount;
 uniform vec4 u_cast[3];
 uniform float u_castCount;
+uniform vec2 u_castDir;
+uniform float u_castSpread;
 
 // One coherent light rig for the whole surface: three slow drifting
 // light blobs, a soft area light bleeding in from the edges, the
@@ -89,43 +91,33 @@ float lightShadow(vec2 p, vec2 l, vec4 occ, float soft) {
     return smoothstep(0.0, soft, band);
 }
 
-// One single hard shadow, one caster. The pointer IS the light: rays
-// grazing the control's far corners bound a wedge that starts at the
-// control and runs a long way across the surface, flaring open with
-// distance — hovering the control throws a big sharp shadow away from
-// the mouse; with the mouse away, the same wedge rests on the key
-// light at the right edge.
+// One single hard shadow, one hovered control. A true wedge: apex at
+// the control's light-facing corner, two — and only two — perfectly
+// straight edge rays diverging down the fixed top-right to bottom-left
+// key direction. No flare kinks, no notches; the tip simply fades.
 float cross2(vec2 a, vec2 b) {
     return a.x * b.y - a.y * b.x;
 }
 
-float castFan(vec2 p, vec4 c, vec2 e, vec2 L) {
-    vec2 bl = (c.xy - 0.5) * e;
-    vec2 tr = bl + c.zw * e;
-    float farX = L.x > (bl.x + tr.x) * 0.5 ? bl.x : tr.x;
+float castFan(vec2 p, vec4 c, vec2 e, vec2 dir, float tanS) {
+    vec2 apex = (c.xy - 0.5) * e;
+    vec2 v = p - apex;
+    float t = dot(v, dir);
 
-    vec2 rT = vec2(farX, tr.y) - L;
-    vec2 rB = vec2(farX, bl.y) - L;
-    vec2 v = p - L;
-
-    float sT = cross2(rT, v);
-    float sB = cross2(rB, v);
-
-    if (sT * sB >= 0.0) {
+    if (t <= 0.0) {
         return 0.0;
     }
 
-    vec2 mid = normalize(normalize(rT) + normalize(rB));
-    float back = max(dot(rT, mid), dot(rB, mid));
-    float dist = dot(v, mid) - back;
+    float edge = t * tanS;
+    float dSide = edge - abs(cross2(dir, v));
 
-    if (dist < 0.0) {
+    if (dSide < 0.0) {
         return 0.0;
     }
 
-    float feather = smoothstep(0.0, 0.006 * length(rT), abs(sT))
-        * smoothstep(0.0, 0.006 * length(rB), abs(sB));
-    float tip = 1.0 - smoothstep(0.9, 1.7, dist);
+    float len = min(1.7, 0.85 + (c.z + c.w) * 2.2);
+    float feather = smoothstep(0.0, 0.006, dSide);
+    float tip = 1.0 - smoothstep(len * 0.62, len, t);
 
     return feather * tip;
 }
@@ -190,9 +182,7 @@ void main() {
     float castCut = 0.0;
 
     if (u_castCount > 0.0) {
-        vec2 keyL = vec2(e.x * 0.95, e.y * 0.30);
-        vec2 castL = mix(keyL, pl, clamp(u_pointer.w, 0.0, 1.0));
-        castCut = clamp(castFan(p, u_cast[0], e, castL) * u_castCount * 1.25, 0.0, 1.0);
+        castCut = clamp(castFan(p, u_cast[0], e, u_castDir, u_castSpread) * u_castCount, 0.0, 1.0);
     }
 
     // Coherent shading: light is stronger near the top (ambient from
@@ -423,6 +413,8 @@ const ensureMaster = () => {
             occCount: gl.getUniformLocation(program, 'u_occCount'),
             cast: gl.getUniformLocation(program, 'u_cast[0]'),
             castCount: gl.getUniformLocation(program, 'u_castCount'),
+            castDir: gl.getUniformLocation(program, 'u_castDir'),
+            castSpread: gl.getUniformLocation(program, 'u_castSpread'),
         },
     }
 
@@ -581,98 +573,105 @@ const collectOccluders = (entry) => {
     return n
 }
 
-const collectCasters = (entry, seconds) => {
+// One shadow, one owner — and only while hovering. The control under
+// the pointer takes the cast slot; the shadow's strength eases in and
+// out (never snaps), and its direction is the fixed top-right to
+// bottom-left key cut, allowed to sway with the mouse by only a few
+// degrees before it is clamped and eased.
+const CAST_BASE = -2.3561945
+const CAST_KEY_X = -0.7071
+const CAST_KEY_Y = -0.7071
+
+const collectCasters = (entry) => {
     const rect = entry.rect
-
-    if (! rect || rect.width < 1) {
-        return 0
-    }
-
-    const ex = rect.width / Math.max(rect.width, rect.height)
-    const ey = rect.height / Math.max(rect.width, rect.height)
-
-    // Mirror the shader's blob field in UV space so the three casters
-    // we hand to the GPU are the ones the lights are actually falling
-    // on right now — a control only casts while lit.
-    const blobs = []
-
-    for (let i = 0; i < 3; i++) {
-        const o = i * 2.4
-
-        blobs.push({
-            x: 0.5 + Math.sin(seconds * 0.085 + o) * 0.34,
-            y: 0.5 + Math.cos(seconds * 0.062 + o * 1.7) * 0.30,
-            r2: 0.16 + 0.05 * Math.sin(seconds * 0.11 + o * 3.1),
-        })
-    }
-
     const pointer = entry.pointer
-    const candidates = []
-    const seen = new Set()
 
-    const push = (o, el) => {
-        if (! o || o.width < 4 || o.height < 4 || seen.has(o)) {
-            return
+    // Ease the strength toward "hovering something" — fades in/out.
+    const ease = entry.castEase ?? 0
+    let hover = null
+
+    if (rect && rect.width > 1 && pointer.w > 0.35) {
+        const px = pointer.x
+        const py = 1 - pointer.y
+        let bestArea = Infinity
+
+        const test = (o) => {
+            if (! o || o.width < 4 || o.height < 4) {
+                return
+            }
+
+            const x = (o.left - rect.left) / rect.width
+            const y = 1 - (o.bottom - rect.top) / rect.height
+            const w = o.width / rect.width
+            const h = o.height / rect.height
+
+            if (px < x || px > x + w || py < y || py > y + h) {
+                return
+            }
+
+            const area = w * h
+
+            if (area < bestArea) {
+                bestArea = area
+                hover = { x, y, w, h }
+            }
         }
 
-        seen.add(o)
-
-        const u = {
-            x: (o.left - rect.left) / rect.width,
-            y: 1 - (o.bottom - rect.top) / rect.height,
-            w: o.width / rect.width,
-            h: o.height / rect.height,
-            score: 0,
+        for (const el of entry.castEls) {
+            test(el.__bcCastRect)
         }
 
-        const cx = u.x + u.w / 2
-        const cy = u.y + u.h / 2
-
-        for (const blob of blobs) {
-            const dx = (cx - blob.x) * ex
-            const dy = (cy - blob.y) * ey
-            const l = Math.exp(-(dx * dx + dy * dy) / blob.r2)
-
-            u.score = Math.max(u.score, l)
-        }
-
-        if (pointer.w > 0.05) {
-            const dx = (cx - pointer.x) * ex
-            const dy = (cy - (1 - pointer.y)) * ey
-            const l = Math.exp(-(dx * dx + dy * dy) / 0.10) * pointer.w * 1.6
-
-            u.score = Math.max(u.score, l)
-        }
-
-        candidates.push(u)
-    }
-
-    for (const el of entry.castEls) {
-        push(el.__bcCastRect, el)
-    }
-
-    for (const caster of casters) {
-        if (! entry.el.contains(caster.el)) {
-            push(caster.rect, caster.el)
+        for (const caster of casters) {
+            if (! entry.el.contains(caster.el)) {
+                test(caster.rect)
+            }
         }
     }
 
-    candidates.sort((a, b) => b.score - a.score)
+    if (hover) {
+        entry.castHover = hover
+    }
 
-    const best = candidates[0]
+    const target = hover ? 1 : 0
+    const val = ease + (target - ease) * 0.07
 
-    // One shadow, one owner: the single best-lit control casts, and
-    // the fan's darkness scales with how strongly the light is on it.
-    if (! best || best.score < 0.06) {
+    entry.castEase = val
+
+    if (val < 0.01 || ! entry.castHover) {
+        entry.castEase = target === 0 ? 0 : val
+
         return 0
     }
 
-    castBuf[0] = best.x
-    castBuf[1] = best.y
-    castBuf[2] = best.w
-    castBuf[3] = best.h
+    const hv = entry.castHover
 
-    return Math.min(best.score, 1.0)
+    // Cut direction: always the key diagonal, top-right to bottom
+    // left. Eased once on entry so nothing snaps; no sway.
+    const a = entry.castDirA ?? CAST_BASE
+    let step = CAST_BASE - a
+
+    step = Math.atan2(Math.sin(step), Math.cos(step))
+
+    entry.castDirA = a + step * 0.08
+    entry.castDirX = Math.cos(entry.castDirA)
+    entry.castDirY = Math.sin(entry.castDirA)
+
+    // Wedge half-angle from the control's size — big control, big
+    // shadow — eased so switching casters never snaps.
+    const spreadWant = 0.12 + Math.min(0.18, (hv.w + hv.h) * 1.2)
+    const easedSpread = entry.castSpreadWant === undefined
+        ? spreadWant
+        : entry.castSpreadWant + (spreadWant - entry.castSpreadWant) * 0.08
+
+    entry.castSpreadWant = spreadWant
+    entry.castSpread = Math.tan(easedSpread)
+
+    castBuf[0] = hv.x
+    castBuf[1] = hv.y
+    castBuf[2] = hv.w
+    castBuf[3] = hv.h
+
+    return Math.min(val, 1.0)
 }
 
 const renderSurface = (m, entry, seconds) => {
@@ -700,9 +699,11 @@ const renderSurface = (m, entry, seconds) => {
         gl.uniform1fv(uniforms.occSoft, occSoftBuf)
     }
 
-    const castCount = collectCasters(entry, seconds)
+    const castCount = collectCasters(entry)
 
     gl.uniform1f(uniforms.castCount, castCount)
+    gl.uniform2f(uniforms.castDir, entry.castDirX, entry.castDirY)
+    gl.uniform1f(uniforms.castSpread, entry.castSpread)
 
     if (castCount > 0) {
         gl.uniform4fv(uniforms.cast, castBuf)
@@ -829,6 +830,10 @@ const register = (el) => {
         canvas,
         ctx,
         castEls: [],
+        castEase: 0,
+        castDirX: CAST_KEY_X,
+        castSpread: 0.12,
+        castDirY: CAST_KEY_Y,
         visible: true,
         width: 0,
         height: 0,
